@@ -122,7 +122,7 @@ sudo pacman -S libxkbcommon-x11 libxcursor libxrandr libxi wayland              
 
 **It prints "the window is drawn in software instead".** No usable GPU driver was found (common in virtual machines). Everything still works; installing Mesa (`libgl1-mesa-dri` / `mesa-dri-drivers` / `mesa`) gives smoother drawing. To always use software drawing, start it with `ICED_BACKEND=tiny-skia sysmon`.
 
-**It prints "could not find any font".** The system has no fonts installed (only seen on bare containers). Install one: `fonts-dejavu-core` (Debian, Ubuntu), `dejavu-sans-fonts` (Fedora) or `ttf-dejavu` (Arch).
+**It prints "could not find any font".** The system has no fonts installed (only seen on bare containers). Install one: `fonts-dejavu-core` (Debian, Ubuntu), `dejavu-sans-fonts` (Fedora), `dejavu-fonts` (openSUSE) or `ttf-dejavu` (Arch).
 
 **No temperatures or fans.** See the note on fan speed above. Virtual machines have no sensors.
 

@@ -18,7 +18,7 @@ optdepends=('mesa: GPU-accelerated drawing'
             'xdg-utils: open the folder of an exported CSV'
             'lm_sensors: detect more motherboard sensors')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('47f8dc7557bf76151b2d7137fbaf324bed0097eacc0705991b38823c2598f8f0')
 
 prepare() {
   cd "$pkgname-$pkgver"

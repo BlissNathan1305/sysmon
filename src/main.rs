@@ -99,6 +99,7 @@ const FONT_HELP: &str = "\
 sysmon could not find any font to draw text with. Install one, for example:
   Debian/Ubuntu: sudo apt install fonts-dejavu-core
   Fedora:        sudo dnf install dejavu-sans-fonts
+  openSUSE:      sudo zypper install dejavu-fonts
   Arch:          sudo pacman -S ttf-dejavu";
 
 /// The last panic's text, so `main` can tell what went wrong.

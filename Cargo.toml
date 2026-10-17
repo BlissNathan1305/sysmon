@@ -67,5 +67,7 @@ assets = [
 [package.metadata.generate-rpm.recommends]
 mesa-dri-drivers = "*"
 dejavu-sans-fonts = "*"
+# openSUSE names the same fonts differently; a missing weak dependency is ignored.
+dejavu-fonts = "*"
 libnotify = "*"
 hwdata = "*"
