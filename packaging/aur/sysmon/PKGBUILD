@@ -1,6 +1,6 @@
 # Maintainer: Samuel Nathaniel <48740078+BlissNathan1305@users.noreply.github.com>
 pkgname=sysmon
-pkgver=0.3.1
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Live system monitor: CPU, memory, GPU, temperatures, battery, disks, network and processes"
 arch=('x86_64' 'aarch64')
@@ -18,7 +18,7 @@ optdepends=('mesa: GPU-accelerated drawing'
             'xdg-utils: open the folder of an exported CSV'
             'lm_sensors: detect more motherboard sensors')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('47f8dc7557bf76151b2d7137fbaf324bed0097eacc0705991b38823c2598f8f0')
+sha256sums=('bb1a03df85e9facee8998ef58538c9fdc6427967adfd274631d17c7c6fa71669')
 
 prepare() {
   cd "$pkgname-$pkgver"

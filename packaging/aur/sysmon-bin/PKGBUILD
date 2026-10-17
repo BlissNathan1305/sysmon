@@ -1,7 +1,7 @@
 # Maintainer: Samuel Nathaniel <48740078+BlissNathan1305@users.noreply.github.com>
 pkgname=sysmon-bin
 _pkgname=sysmon
-pkgver=0.3.1
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="Live system monitor: CPU, memory, GPU, temperatures, battery, disks, network and processes (prebuilt)"
 arch=('x86_64' 'aarch64')
@@ -21,8 +21,8 @@ provides=("$_pkgname")
 conflicts=("$_pkgname")
 source_x86_64=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-x86_64-linux.tar.gz")
 source_aarch64=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-aarch64-linux.tar.gz")
-sha256sums_x86_64=('a7623156abb0f4c11869a627f4a3563e7af1ae56c01fd56644cfc7d0ddb317af')
-sha256sums_aarch64=('6941c0b87c011f34151d1fed097de9c1f3f8e24b5c8540b513785471fbad2bb7')
+sha256sums_x86_64=('2aac578a9028bafdb793564b738745f3c61c959b2de7b09e36409f3d40580f27')
+sha256sums_aarch64=('cc540657f0d74c4e7cb4e35e72f9b3df8d4ac10a7dad9016521feda26cc92138')
 
 package() {
   cd "$_pkgname-$pkgver-$CARCH-linux"

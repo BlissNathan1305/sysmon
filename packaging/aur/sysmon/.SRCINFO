@@ -1,6 +1,6 @@
 pkgbase = sysmon
 	pkgdesc = Live system monitor: CPU, memory, GPU, temperatures, battery, disks, network and processes
-	pkgver = 0.3.1
+	pkgver = 0.4.0
 	pkgrel = 1
 	url = https://github.com/BlissNathan1305/sysmon
 	arch = x86_64
@@ -25,7 +25,7 @@ pkgbase = sysmon
 	optdepends = xdg-utils: open the folder of an exported CSV
 	optdepends = lm_sensors: detect more motherboard sensors
 	options = !debug
-	source = sysmon-0.3.1.tar.gz::https://github.com/BlissNathan1305/sysmon/archive/refs/tags/v0.3.1.tar.gz
-	sha256sums = 47f8dc7557bf76151b2d7137fbaf324bed0097eacc0705991b38823c2598f8f0
+	source = sysmon-0.4.0.tar.gz::https://github.com/BlissNathan1305/sysmon/archive/refs/tags/v0.4.0.tar.gz
+	sha256sums = bb1a03df85e9facee8998ef58538c9fdc6427967adfd274631d17c7c6fa71669
 
 pkgname = sysmon
