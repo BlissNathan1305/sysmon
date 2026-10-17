@@ -78,6 +78,10 @@ pub fn main() -> iced::Result {
                 eprintln!("\n{DISPLAY_HELP}");
                 std::process::exit(1);
             }
+            if message.contains("no default font") {
+                eprintln!("\n{FONT_HELP}");
+                std::process::exit(1);
+            }
             retry_with_software_drawing();
             std::panic::resume_unwind(panic)
         }
@@ -90,6 +94,12 @@ desktop session. On minimal systems, install the display libraries:
   Debian/Ubuntu: sudo apt install libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 libwayland-client0
   Fedora:        sudo dnf install libxkbcommon-x11 libXcursor libXrandr libXi libwayland-client
   Arch:          sudo pacman -S libxkbcommon-x11 libxcursor libxrandr libxi wayland";
+
+const FONT_HELP: &str = "\
+sysmon could not find any font to draw text with. Install one, for example:
+  Debian/Ubuntu: sudo apt install fonts-dejavu-core
+  Fedora:        sudo dnf install dejavu-sans-fonts
+  Arch:          sudo pacman -S ttf-dejavu";
 
 /// The last panic's text, so `main` can tell what went wrong.
 static PANIC_MESSAGE: Mutex<String> = Mutex::new(String::new());

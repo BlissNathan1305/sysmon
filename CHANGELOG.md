@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 — 2026-10-17
+
+- On a system with no fonts at all, sysmon now says which font package to install instead of crashing twice.
+- The .deb depends on a basic font and the AUR packages on `ttf-font`; the .rpm recommends DejaVu Sans.
+- Tested from the release packages on Ubuntu 22.04 (with and without Mesa), Debian 12, Fedora and Arch.
+
 ## 0.3.0 — 2026-10-17
 
 - New **Settings** tab: theme, temperature unit, refresh rate, alerts and export in one place.

@@ -1,6 +1,6 @@
 [package]
 name = "sysmon"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.87"
 description = "A live system monitor for Linux: CPU, memory, GPU, temperatures, battery, disks, network and processes"
@@ -26,7 +26,7 @@ copyright = "2026, Samuel Nathaniel"
 section = "utils"
 priority = "optional"
 # The window libraries are loaded at run time, so $auto cannot see them.
-depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0"
+depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, fonts-dejavu-core | fonts-noto-core | fonts-liberation2 | fonts-freefont-ttf"
 recommends = "libegl1 | libvulkan1, libgl1-mesa-dri, libnotify-bin, hwdata | pciutils, xdg-utils"
 suggests = "lm-sensors"
 extended-description = """\
@@ -66,5 +66,6 @@ assets = [
 
 [package.metadata.generate-rpm.recommends]
 mesa-dri-drivers = "*"
+dejavu-sans-fonts = "*"
 libnotify = "*"
 hwdata = "*"

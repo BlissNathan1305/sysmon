@@ -1,13 +1,15 @@
 # Maintainer: Samuel Nathaniel <48740078+BlissNathan1305@users.noreply.github.com>
 pkgname=sysmon
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc="Live system monitor: CPU, memory, GPU, temperatures, battery, disks, network and processes"
 arch=('x86_64' 'aarch64')
 url="https://github.com/BlissNathan1305/sysmon"
 license=('Apache-2.0')
+# The release binary is already stripped; there are no symbols for a debug package.
+options=('!debug')
 # The window libraries are loaded at run time, so they are listed by hand.
-depends=('gcc-libs' 'glibc' 'libx11' 'libxcursor' 'libxi' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'wayland')
+depends=('gcc-libs' 'glibc' 'libx11' 'libxcursor' 'libxi' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'hicolor-icon-theme' 'ttf-font' 'wayland')
 makedepends=('cargo')
 optdepends=('mesa: GPU-accelerated drawing'
             'vulkan-icd-loader: Vulkan drawing'

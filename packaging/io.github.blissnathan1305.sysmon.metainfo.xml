@@ -73,6 +73,11 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.1" date="2026-10-17">
+      <description>
+        <p>Clear advice instead of a crash on systems without fonts, and a font dependency in the packages.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-10-17">
       <description>
         <p>Settings tab, desktop alerts, CSV export, a remembered window size, software drawing on machines without a usable GPU driver, and correct package dependencies.</p>
