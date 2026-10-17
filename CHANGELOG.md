@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 — 2026-10-17
+
+- New **Settings** tab: theme, temperature unit, refresh rate, alerts and export in one place.
+- **Desktop alerts** while sysmon is open: CPU too hot, memory or disk almost full, battery low. On by default with adjustable limits; temperature and memory must stay high for 15 seconds, and each alert repeats at most every 10 minutes. Also shown in a strip at the top of the window.
+- **Export history** to CSV (Ctrl+E) in the Downloads folder.
+- The window size is remembered.
+- Machines without a usable GPU driver (virtual machines, no Mesa) now get a software-drawn window instead of a crash, and a missing display library gives clear install instructions.
+- The `.deb` and `.rpm` now declare the display libraries the window loads at run time; tested on Ubuntu 22.04, Debian 12, Fedora and Arch.
+- Card shadows removed: they drew as black boxes with the software renderer.
+- Single files bind-mounted from a disk (containers) are no longer listed as file systems.
+- Home-folder paths are shown as `~`.
+- AppStream metadata for software centres, AUR recipes (`sysmon` and `sysmon-bin`), and ARM64 release builds.
+- Tests with fake `/sys` trees for AMD and Intel graphics, AMD sensors and fans, ARM boards, several batteries and wireless devices.
+
 ## 0.2.0 — 2026-10-17
 
 First release.

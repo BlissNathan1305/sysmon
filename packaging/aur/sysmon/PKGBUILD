@@ -1,0 +1,48 @@
+# Maintainer: Samuel Nathaniel <48740078+BlissNathan1305@users.noreply.github.com>
+pkgname=sysmon
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Live system monitor: CPU, memory, GPU, temperatures, battery, disks, network and processes"
+arch=('x86_64' 'aarch64')
+url="https://github.com/BlissNathan1305/sysmon"
+license=('Apache-2.0')
+# The window libraries are loaded at run time, so they are listed by hand.
+depends=('gcc-libs' 'glibc' 'libx11' 'libxcursor' 'libxi' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'wayland')
+makedepends=('cargo')
+optdepends=('mesa: GPU-accelerated drawing'
+            'vulkan-icd-loader: Vulkan drawing'
+            'libnotify: desktop alerts'
+            'hwdata: graphics and network card names'
+            'xdg-utils: open the folder of an exported CSV'
+            'lm_sensors: detect more motherboard sensors')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/sysmon "$pkgdir/usr/bin/sysmon"
+  install -Dm644 packaging/sysmon.desktop "$pkgdir/usr/share/applications/sysmon.desktop"
+  install -Dm644 packaging/sysmon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/sysmon.svg"
+  install -Dm644 packaging/io.github.blissnathan1305.sysmon.metainfo.xml -t "$pkgdir/usr/share/metainfo/"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

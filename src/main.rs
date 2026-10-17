@@ -1,15 +1,16 @@
 //! sysmon: a live view of a Linux computer's CPU, memory, graphics, sensors,
 //! battery, disks, network and processes.
 
+mod alerts;
 mod gpu;
 mod graph;
+mod history;
 mod pci;
 mod report;
 mod stats;
 mod style;
 mod view;
 
-use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -23,10 +24,8 @@ use iced::{
     Subscription, Theme,
 };
 
+use history::History;
 use stats::{Collector, Snapshot, StaticInfo};
-
-/// Points of history kept for the graphs (one per sample).
-const HISTORY: usize = 120;
 
 const HELP: &str = "\
 sysmon — a live system monitor for Linux
@@ -38,9 +37,10 @@ Options:
   -V, --version    Show the version and exit
 
 Keyboard shortcuts in the window:
-  Ctrl+1 … Ctrl+8  Switch tabs
+  Ctrl+1 … Ctrl+9  Switch tabs
   Ctrl+F           Search processes
   Ctrl+P           Pause or resume updates
+  Ctrl+E           Export the recent history to a CSV file
   Esc              Close the process details
   Ctrl+Q           Quit
 
@@ -65,16 +65,76 @@ pub fn main() -> iced::Result {
         }
     }
     let prefs = Prefs::load();
+    install_panic_hook();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_window(prefs))) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            retry_with_software_drawing();
+            Err(e)
+        }
+        Err(panic) => {
+            let message = PANIC_MESSAGE.lock().map(|m| m.clone()).unwrap_or_default();
+            if message.contains("event loop") {
+                eprintln!("\n{DISPLAY_HELP}");
+                std::process::exit(1);
+            }
+            retry_with_software_drawing();
+            std::panic::resume_unwind(panic)
+        }
+    }
+}
+
+const DISPLAY_HELP: &str = "\
+sysmon could not open a window. Make sure it is started from a graphical
+desktop session. On minimal systems, install the display libraries:
+  Debian/Ubuntu: sudo apt install libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 libwayland-client0
+  Fedora:        sudo dnf install libxkbcommon-x11 libXcursor libXrandr libXi libwayland-client
+  Arch:          sudo pacman -S libxkbcommon-x11 libxcursor libxrandr libxi wayland";
+
+/// The last panic's text, so `main` can tell what went wrong.
+static PANIC_MESSAGE: Mutex<String> = Mutex::new(String::new());
+
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Ok(mut m) = PANIC_MESSAGE.lock() {
+            *m = info.to_string();
+        }
+        default(info);
+    }));
+}
+
+/// Some machines (virtual machines, systems without Mesa) have no usable GPU
+/// driver, and the GPU renderer gives up. Start again with iced's software
+/// renderer instead, unless that was already tried.
+fn retry_with_software_drawing() {
+    use std::os::unix::process::CommandExt;
+    if std::env::var_os("ICED_BACKEND").is_some() {
+        return;
+    }
+    eprintln!("sysmon: the graphics driver could not be used, so the window is drawn in software instead.");
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/proc/self/exe"));
+    // exec only returns if it failed.
+    let err = std::process::Command::new(exe).args(std::env::args_os().skip(1)).env("ICED_BACKEND", "tiny-skia").exec();
+    eprintln!("sysmon: could not restart: {err}");
+}
+
+fn run_window(prefs: Prefs) -> iced::Result {
+    // The size the window had last time, within sensible bounds.
+    let (w, h) = prefs.window.unwrap_or((1180, 800));
     App::run(Settings {
         window: window::Settings {
-            size: Size::new(1180.0, 800.0),
-            min_size: Some(Size::new(900.0, 600.0)),
+            size: Size::new(w.clamp(MIN_W, 4000) as f32, h.clamp(MIN_H, 3000) as f32),
+            min_size: Some(Size::new(MIN_W as f32, MIN_H as f32)),
             platform_specific: window::settings::PlatformSpecific { application_id: "sysmon".into() },
             ..Default::default()
         },
         ..Settings::with_flags(prefs)
     })
 }
+
+const MIN_W: u32 = 900;
+const MIN_H: u32 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -86,11 +146,21 @@ enum Tab {
     Storage,
     Processes,
     System,
+    Settings,
 }
 
 impl Tab {
-    const ALL: [Tab; 8] =
-        [Tab::Overview, Tab::Cpu, Tab::Memory, Tab::Gpu, Tab::Sensors, Tab::Storage, Tab::Processes, Tab::System];
+    const ALL: [Tab; 9] = [
+        Tab::Overview,
+        Tab::Cpu,
+        Tab::Memory,
+        Tab::Gpu,
+        Tab::Sensors,
+        Tab::Storage,
+        Tab::Processes,
+        Tab::System,
+        Tab::Settings,
+    ];
 
     fn key(self) -> &'static str {
         match self {
@@ -102,6 +172,7 @@ impl Tab {
             Tab::Storage => "storage",
             Tab::Processes => "processes",
             Tab::System => "system",
+            Tab::Settings => "settings",
         }
     }
 
@@ -115,6 +186,7 @@ impl Tab {
             Tab::Storage => "Disks & Network",
             Tab::Processes => "Processes",
             Tab::System => "System",
+            Tab::Settings => "Settings",
         }
     }
 
@@ -190,6 +262,9 @@ struct Prefs {
     unit: TempUnit,
     show_kernel: bool,
     show_virtual: bool,
+    /// Last window size in logical pixels.
+    window: Option<(u32, u32)>,
+    alerts: alerts::Settings,
 }
 
 impl Prefs {
@@ -209,6 +284,8 @@ impl Prefs {
             unit: TempUnit::Celsius,
             show_kernel: false,
             show_virtual: false,
+            window: None,
+            alerts: alerts::Settings::default(),
         };
         if let Some(text) = Self::path().and_then(|f| std::fs::read_to_string(f).ok()) {
             for line in text.lines() {
@@ -229,6 +306,20 @@ impl Prefs {
                     Some(("unit", v)) => p.unit = if v == "f" { TempUnit::Fahrenheit } else { TempUnit::Celsius },
                     Some(("show_kernel_threads", v)) => p.show_kernel = v == "true",
                     Some(("show_virtual_interfaces", v)) => p.show_virtual = v == "true",
+                    Some(("window", v)) => {
+                        p.window = v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                    }
+                    Some((k, v)) if k.starts_with("alert_") => {
+                        // alert_temp=on:90 or alert_temp=off:90
+                        let name = &k["alert_".len()..];
+                        if let (Some(kind), Some((state, value))) =
+                            (alerts::Kind::ALL.into_iter().find(|a| a.key() == name), v.split_once(':'))
+                        {
+                            if let Ok(value) = value.parse::<u32>() {
+                                p.alerts.set(kind, alerts::Limit { on: state == "on", value });
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -247,7 +338,7 @@ impl Prefs {
             ThemeChoice::Dark => "dark",
             ThemeChoice::Light => "light",
         };
-        let body = format!(
+        let mut body = format!(
             "theme={theme}\ninterval_ms={}\ntab={}\nunit={}\nshow_kernel_threads={}\nshow_virtual_interfaces={}\n",
             self.interval.0,
             self.tab.key(),
@@ -255,6 +346,13 @@ impl Prefs {
             self.show_kernel,
             self.show_virtual,
         );
+        if let Some((w, h)) = self.window {
+            body.push_str(&format!("window={w}x{h}\n"));
+        }
+        for kind in alerts::Kind::ALL {
+            let l = self.alerts.get(kind);
+            body.push_str(&format!("alert_{}={}:{}\n", kind.key(), if l.on { "on" } else { "off" }, l.value));
+        }
         let _ = std::fs::write(path, body);
     }
 }
@@ -292,57 +390,6 @@ fn system_prefers_dark() -> Option<bool> {
     run("xfconf-query", &["-c", "xsettings", "-p", "/Net/ThemeName"]).map(|t| t.contains("dark"))
 }
 
-#[derive(Default)]
-struct History {
-    cpu: VecDeque<f32>,
-    cores: Vec<VecDeque<f32>>,
-    mem: VecDeque<f32>,
-    swap: VecDeque<f32>,
-    temp: VecDeque<f32>,
-    rx: VecDeque<f32>,
-    tx: VecDeque<f32>,
-    read: VecDeque<f32>,
-    write: VecDeque<f32>,
-    gpu: Vec<VecDeque<f32>>,
-    gpu_mem: Vec<VecDeque<f32>>,
-}
-
-fn push(q: &mut VecDeque<f32>, v: f32) {
-    if q.len() == HISTORY {
-        q.pop_front();
-    }
-    q.push_back(v);
-}
-
-impl History {
-    fn record(&mut self, s: &Snapshot) {
-        push(&mut self.cpu, s.cpu_total);
-        self.cores.resize_with(s.cpu_cores.len(), VecDeque::new);
-        for (q, v) in self.cores.iter_mut().zip(&s.cpu_cores) {
-            push(q, *v);
-        }
-        push(&mut self.mem, s.mem.used_pct());
-        push(&mut self.swap, s.mem.swap_pct());
-        if let Some(t) = s.cpu_temp() {
-            push(&mut self.temp, t);
-        }
-        push(&mut self.rx, s.net_rx() as f32);
-        push(&mut self.tx, s.net_tx() as f32);
-        push(&mut self.read, s.disk_read() as f32);
-        push(&mut self.write, s.disk_write() as f32);
-        self.gpu.resize_with(s.gpus.len(), VecDeque::new);
-        self.gpu_mem.resize_with(s.gpus.len(), VecDeque::new);
-        for (i, g) in s.gpus.iter().enumerate() {
-            if let Some(u) = g.usage {
-                push(&mut self.gpu[i], u);
-            }
-            if let (Some(used), Some(total)) = (g.vram_used, g.vram_total) {
-                push(&mut self.gpu_mem[i], stats::pct(used, total));
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 enum Message {
     Tick,
@@ -363,8 +410,23 @@ enum Message {
     CloseDetails,
     FocusSearch,
     CopyReport,
-    Resized(u32),
+    Resized(u32, u32),
+    AlertOn(alerts::Kind, bool),
+    AlertValue(alerts::Choice),
+    TestAlert,
+    Notified(Option<bool>),
+    ExportCsv,
+    OpenFolder(PathBuf),
+    DismissBanner,
     Quit,
+}
+
+/// A message across the top of the window: an alert, or where a file went.
+struct Banner {
+    text: String,
+    at: Instant,
+    urgent: bool,
+    folder: Option<PathBuf>,
 }
 
 struct App {
@@ -387,6 +449,10 @@ struct App {
     copied: Option<Instant>,
     /// The System tab's report and when it was gathered.
     report: Option<(Instant, Vec<report::Section>)>,
+    watcher: alerts::Watcher,
+    banner: Option<Banner>,
+    /// When the window was last resized, until the new size is saved.
+    resized_at: Option<Instant>,
 }
 
 fn search_id() -> text_input::Id {
@@ -436,6 +502,10 @@ impl App {
         }
     }
 
+    fn show_banner(&mut self, text: String, urgent: bool, folder: Option<PathBuf>) {
+        self.banner = Some(Banner { text, at: Instant::now(), urgent, folder });
+    }
+
     fn dark(&self) -> bool {
         match self.prefs.theme {
             ThemeChoice::System => self.system_dark,
@@ -476,6 +546,9 @@ impl Application for App {
             width: 1180,
             copied: None,
             report: None,
+            watcher: alerts::Watcher::default(),
+            banner: None,
+            resized_at: None,
         };
         // A second reading straight away so the numbers fill in quickly.
         let first = sample(app.collector.clone(), Duration::from_millis(400));
@@ -502,6 +575,14 @@ impl Application for App {
                     self.busy = true;
                     cmds.push(sample(self.collector.clone(), Duration::ZERO));
                 }
+                // Save the window size once a resize has settled.
+                if self.resized_at.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
+                    self.resized_at = None;
+                    self.prefs.save();
+                }
+                if self.banner.as_ref().is_some_and(|b| b.at.elapsed() > Duration::from_secs(30)) {
+                    self.banner = None;
+                }
                 // Follow the desktop if the user flips light/dark mode.
                 if self.prefs.theme == ThemeChoice::System && self.theme_checked.elapsed() > Duration::from_secs(5) {
                     self.theme_checked = Instant::now();
@@ -517,6 +598,15 @@ impl Application for App {
                         self.snap = s;
                         self.refresh_report();
                     }
+                    let fired = self.watcher.check(&self.prefs.alerts, &self.snap, Instant::now());
+                    if let Some(first) = fired.first() {
+                        self.show_banner(format!("{}: {}", first.title, first.body), first.urgent, None);
+                    }
+                    let sends: Vec<_> = fired
+                        .into_iter()
+                        .map(|a| off_thread(move || Some(alerts::notify(&a)), Message::Notified))
+                        .collect();
+                    return Command::batch(sends);
                 }
             }
             Message::Tab(t) => {
@@ -580,8 +670,64 @@ impl Application for App {
                 self.copied = Some(Instant::now());
                 return clipboard::write(report::to_text(&report::gather(&self.info, &self.snap)));
             }
-            Message::Resized(w) => self.width = w,
-            Message::Quit => return window::close(window::Id::MAIN),
+            Message::Resized(w, h) => {
+                self.width = w;
+                if self.prefs.window != Some((w, h)) {
+                    self.prefs.window = Some((w, h));
+                    self.resized_at = Some(Instant::now());
+                }
+            }
+            Message::AlertOn(kind, on) => {
+                let l = self.prefs.alerts.get(kind);
+                self.prefs.alerts.set(kind, alerts::Limit { on, ..l });
+                self.prefs.save();
+            }
+            Message::AlertValue(c) => {
+                let l = self.prefs.alerts.get(c.kind);
+                self.prefs.alerts.set(c.kind, alerts::Limit { value: c.value, ..l });
+                self.prefs.save();
+            }
+            Message::TestAlert => {
+                let a = alerts::Alert {
+                    title: "sysmon test alert".into(),
+                    body: "Alerts are working. This is how a warning will look.".into(),
+                    urgent: false,
+                };
+                return off_thread(move || Some(alerts::notify(&a)), Message::Notified);
+            }
+            Message::Notified(ok) => {
+                if ok == Some(false) {
+                    self.show_banner(
+                        "Desktop notifications are not available (install libnotify / notify-send). Alerts will still appear here."
+                            .into(),
+                        false,
+                        None,
+                    );
+                }
+            }
+            Message::ExportCsv => {
+                let dir = history::download_dir();
+                match history::save_csv(&self.hist, &dir) {
+                    Ok(path) => self.show_banner(format!("History saved to {}", view::tilde(&path)), false, Some(dir)),
+                    Err(e) => self.show_banner(format!("Could not save the history: {e}"), true, None),
+                }
+            }
+            Message::OpenFolder(dir) => {
+                if let Some(p) = gpu::in_path("xdg-open") {
+                    let _ = std::process::Command::new(p)
+                        .arg(dir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+            }
+            Message::DismissBanner => self.banner = None,
+            Message::Quit => {
+                if self.resized_at.is_some() {
+                    self.prefs.save();
+                }
+                return window::close(window::Id::MAIN);
+            }
         }
         Command::none()
     }
@@ -591,7 +737,7 @@ impl Application for App {
             time::every(Duration::from_millis(self.prefs.interval.0)).map(|_| Message::Tick),
             keyboard::on_key_press(on_key),
             event::listen_with(|e, _| match e {
-                Event::Window(_, window::Event::Resized { width, .. }) => Some(Message::Resized(width)),
+                Event::Window(_, window::Event::Resized { width, height }) => Some(Message::Resized(width, height)),
                 _ => None,
             }),
         ])
@@ -611,7 +757,10 @@ fn on_key(key: keyboard::Key, m: keyboard::Modifiers) -> Option<Message> {
         return None;
     }
     match c.as_str() {
-        d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8") => Some(Message::TabIndex(d.parse::<usize>().ok()? - 1)),
+        d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
+            Some(Message::TabIndex(d.parse::<usize>().ok()? - 1))
+        }
+        "e" => Some(Message::ExportCsv),
         "f" => Some(Message::FocusSearch),
         "p" => Some(Message::TogglePause),
         "q" => Some(Message::Quit),

@@ -2,7 +2,7 @@
 
 use iced::theme::Palette;
 use iced::widget::{button, container, progress_bar};
-use iced::{color, Background, Border, Color, Shadow, Theme, Vector};
+use iced::{color, Background, Border, Color, Shadow, Theme};
 
 pub const CPU: Color = color!(0x5a, 0xa9, 0xff);
 pub const MEM: Color = color!(0xb4, 0x8c, 0xff);
@@ -118,11 +118,7 @@ impl container::StyleSheet for Card {
             background: Some(Background::Color(card_color(theme))),
             text_color: Some(theme.palette().text),
             border: Border { color: with_alpha(theme.palette().text, 0.07), width: 1.0, radius: 10.0.into() },
-            shadow: Shadow {
-                color: with_alpha(Color::BLACK, if is_dark(theme) { 0.25 } else { 0.06 }),
-                offset: Vector::new(0.0, 2.0),
-                blur_radius: 8.0,
-            },
+            shadow: Shadow::default(),
         }
     }
 }
@@ -247,4 +243,27 @@ impl progress_bar::StyleSheet for Bar {
 
 pub fn bar(c: Color) -> iced::theme::ProgressBar {
     iced::theme::ProgressBar::Custom(Box::new(Bar(c)))
+}
+
+struct Banner {
+    urgent: bool,
+}
+
+impl container::StyleSheet for Banner {
+    type Style = Theme;
+
+    fn appearance(&self, theme: &Theme) -> container::Appearance {
+        let c = if self.urgent { HOT } else { theme.extended_palette().primary.base.color };
+        container::Appearance {
+            background: Some(Background::Color(with_alpha(c, 0.18))),
+            text_color: Some(theme.palette().text),
+            border: Border { color: with_alpha(c, 0.5), width: 1.0, radius: 0.0.into() },
+            ..Default::default()
+        }
+    }
+}
+
+/// The strip under the tabs for alerts and messages.
+pub fn banner(urgent: bool, _theme: &Theme) -> iced::theme::Container {
+    iced::theme::Container::Custom(Box::new(Banner { urgent }))
 }

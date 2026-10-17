@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -22,3 +22,7 @@ jobs:
         run: cargo test --release --locked
       - name: Installer syntax
         run: sh -n install.sh
+      - name: AppStream metadata
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq appstream
+          appstreamcli validate --no-net packaging/*.metainfo.xml

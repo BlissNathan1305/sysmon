@@ -416,10 +416,10 @@ impl Collector {
             .map(|x| x as u64)
             .unwrap_or(0);
         s.mem = read_memory();
-        let (temps, fans) = read_hwmon();
-        s.temps = if temps.is_empty() { read_thermal_zones() } else { temps };
+        let (temps, fans) = read_hwmon(Path::new("/sys/class/hwmon"));
+        s.temps = if temps.is_empty() { read_thermal_zones(Path::new("/sys/class/thermal")) } else { temps };
         s.fans = fans;
-        let (bats, devices, ac) = read_power();
+        let (bats, devices, ac) = read_power(Path::new("/sys/class/power_supply"));
         s.batteries = bats;
         s.device_batteries = devices;
         s.ac_online = ac;
@@ -642,10 +642,11 @@ fn read_memory() -> Memory {
     }
 }
 
-fn read_hwmon() -> (Vec<Temp>, Vec<Fan>) {
+/// Temperatures and fans from every hwmon chip under `root` (/sys/class/hwmon).
+fn read_hwmon(root: &Path) -> (Vec<Temp>, Vec<Fan>) {
     let mut temps = Vec::new();
     let mut fans = Vec::new();
-    let Ok(dir) = fs::read_dir("/sys/class/hwmon") else { return (temps, fans) };
+    let Ok(dir) = fs::read_dir(root) else { return (temps, fans) };
     let mut chips: Vec<_> = dir.flatten().map(|e| e.path()).collect();
     chips.sort_by_key(|p| {
         p.file_name()
@@ -703,8 +704,8 @@ fn read_hwmon() -> (Vec<Temp>, Vec<Fan>) {
 }
 
 /// For machines whose sensors only appear as thermal zones (many ARM boards).
-fn read_thermal_zones() -> Vec<Temp> {
-    let Ok(dir) = fs::read_dir("/sys/class/thermal") else { return Vec::new() };
+fn read_thermal_zones(root: &Path) -> Vec<Temp> {
+    let Ok(dir) = fs::read_dir(root) else { return Vec::new() };
     let mut zones: Vec<_> =
         dir.flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("thermal_zone")).collect();
     zones.sort();
@@ -763,11 +764,12 @@ pub fn friendly_chip(name: &str) -> String {
     }
 }
 
-fn read_power() -> (Vec<Battery>, Vec<DeviceBattery>, Option<bool>) {
+/// Batteries, device batteries and charger state under `root` (/sys/class/power_supply).
+fn read_power(root: &Path) -> (Vec<Battery>, Vec<DeviceBattery>, Option<bool>) {
     let mut batteries = Vec::new();
     let mut devices = Vec::new();
     let mut ac = None;
-    let Ok(dir) = fs::read_dir("/sys/class/power_supply") else { return (batteries, devices, ac) };
+    let Ok(dir) = fs::read_dir(root) else { return (batteries, devices, ac) };
     let mut entries: Vec<_> = dir.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
@@ -854,6 +856,10 @@ fn read_mounts() -> Vec<Mount> {
         let block = f[0].starts_with("/dev/") && !f[0].starts_with("/dev/loop") && f[2] != "squashfs";
         let mount = unescape_mount(f[1]);
         if !(block || pooled) || mount.starts_with("/snap/") || mount.starts_with("/var/lib/docker") {
+            continue;
+        }
+        // Single files bind-mounted from a disk (containers do this) are not file systems.
+        if !Path::new(&mount).is_dir() {
             continue;
         }
         // The same disk mounted twice (btrfs subvolumes, bind mounts) once only.
@@ -993,7 +999,7 @@ pub fn fmt_duration(secs: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1062,6 +1068,119 @@ mod tests {
         // SAFETY: getuid cannot fail.
         let uid = unsafe { libc::getuid() };
         assert!(lookup_user(uid).is_some_and(|n| !n.is_empty()));
+    }
+
+    /// A throwaway directory tree standing in for part of /sys.
+    pub(crate) struct FakeSys(pub std::path::PathBuf);
+
+    impl FakeSys {
+        pub(crate) fn new(name: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("sysmon-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&p);
+            fs::create_dir_all(&p).unwrap();
+            FakeSys(p)
+        }
+
+        pub(crate) fn file(&self, rel: &str, body: &str) -> &Self {
+            let f = self.0.join(rel);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(f, body).unwrap();
+            self
+        }
+    }
+
+    impl Drop for FakeSys {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn amd_desktop_sensors() {
+        let sys = FakeSys::new("hwmon");
+        sys.file("hwmon0/name", "k10temp\n")
+            .file("hwmon0/temp1_input", "61250\n")
+            .file("hwmon0/temp1_label", "Tctl\n")
+            .file("hwmon0/temp3_input", "55000\n")
+            .file("hwmon0/temp3_label", "Tccd1\n")
+            .file("hwmon1/name", "nct6798\n")
+            .file("hwmon1/fan2_input", "1180\n")
+            .file("hwmon1/fan2_label", "CPU fan\n")
+            .file("hwmon1/temp7_input", "0\n")
+            .file("hwmon2/name", "amdgpu\n")
+            .file("hwmon2/temp1_input", "48000\n")
+            .file("hwmon3/name", "nvme\n")
+            .file("hwmon3/temp1_input", "39850\n")
+            .file("hwmon3/temp1_crit", "84850\n")
+            .file("hwmon3/temp2_max", "65261850\n");
+        let (temps, fans) = read_hwmon(&sys.0);
+        let labels: Vec<&str> = temps.iter().map(|t| t.label.as_str()).collect();
+        // The unused sensor (0 °C) is dropped and the GPU is left to the GPU tab.
+        assert_eq!(labels, ["Tctl", "Tccd1", "NVMe SSD"]);
+        assert_eq!(temps[2].crit, Some(84.85));
+        assert_eq!(fans.len(), 1);
+        assert_eq!((fans[0].label.as_str(), fans[0].rpm), ("CPU fan", 1180));
+        let snap = Snapshot { temps, ..Default::default() };
+        assert_eq!(snap.cpu_temp(), Some(61.25));
+    }
+
+    #[test]
+    fn arm_board_thermal_zones() {
+        let sys = FakeSys::new("thermal");
+        sys.file("thermal_zone0/type", "cpu-thermal\n").file("thermal_zone0/temp", "47236\n");
+        let temps = read_thermal_zones(&sys.0);
+        assert_eq!(temps.len(), 1);
+        assert_eq!(temps[0].label, "CPU");
+        assert_eq!(Snapshot { temps, ..Default::default() }.cpu_temp(), Some(47.236));
+    }
+
+    #[test]
+    fn thinkpad_with_two_batteries_and_a_mouse() {
+        let sys = FakeSys::new("power");
+        sys.file("AC/type", "Mains\n")
+            .file("AC/online", "0\n")
+            // Energy-based battery (µWh / µW), discharging at 10 W.
+            .file("BAT0/type", "Battery\n")
+            .file("BAT0/status", "Discharging\n")
+            .file("BAT0/capacity", "50\n")
+            .file("BAT0/energy_now", "20000000\n")
+            .file("BAT0/energy_full", "40000000\n")
+            .file("BAT0/energy_full_design", "50000000\n")
+            .file("BAT0/power_now", "10000000\n")
+            .file("BAT0/model_name", "01AV430\n")
+            // Charge-based battery (µAh / µA), idle.
+            .file("BAT1/type", "Battery\n")
+            .file("BAT1/status", "Unknown\n")
+            .file("BAT1/capacity", "100\n")
+            .file("BAT1/charge_now", "2000000\n")
+            .file("BAT1/charge_full", "2000000\n")
+            .file("BAT1/current_now", "0\n")
+            .file("hidpp_battery_0/type", "Battery\n")
+            .file("hidpp_battery_0/scope", "Device\n")
+            .file("hidpp_battery_0/model_name", "MX Master 3\n")
+            .file("hidpp_battery_0/capacity_level", "Normal\n")
+            .file("hidpp_battery_0/status", "Discharging\n");
+        let (bats, devices, ac) = read_power(&sys.0);
+        assert_eq!(ac, Some(false));
+        assert_eq!(bats.len(), 2);
+        assert_eq!(bats[0].time_left, Some(2 * 3600), "20 Wh left at 10 W");
+        assert_eq!(bats[0].health, Some(80.0));
+        assert_eq!(bats[0].power_w, Some(10.0));
+        assert_eq!(bats[1].time_left, None);
+        assert_eq!(devices.len(), 1);
+        assert_eq!((devices[0].name.as_str(), devices[0].level.as_str()), ("MX Master 3", "Normal"));
+        let summary = Snapshot { batteries: bats, ..Default::default() }.battery().unwrap();
+        assert_eq!(summary.count, 2);
+        assert_eq!(summary.status, "Discharging");
+    }
+
+    #[test]
+    fn desktop_without_battery() {
+        let sys = FakeSys::new("power-desktop");
+        sys.file("ucsi-source-psy-USBC000:001/type", "USB\n").file("ucsi-source-psy-USBC000:001/online", "1\n");
+        let (bats, devices, ac) = read_power(&sys.0);
+        assert!(bats.is_empty() && devices.is_empty());
+        assert_eq!(ac, Some(true));
     }
 
     #[test]

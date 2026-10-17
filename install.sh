@@ -24,6 +24,8 @@ done
 BIN="$PREFIX/bin/sysmon"
 APPS="$PREFIX/share/applications"
 ICONS="$PREFIX/share/icons/hicolor"
+META="$PREFIX/share/metainfo"
+METAFILE=io.github.blissnathan1305.sysmon.metainfo.xml
 
 refresh() {
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$APPS" 2>/dev/null || true
@@ -31,7 +33,7 @@ refresh() {
 }
 
 if [ "$ACTION" = uninstall ]; then
-    rm -f "$BIN" "$APPS/sysmon.desktop" "$ICONS/scalable/apps/sysmon.svg"
+    rm -f "$BIN" "$APPS/sysmon.desktop" "$ICONS/scalable/apps/sysmon.svg" "$META/$METAFILE"
     refresh
     echo "sysmon removed from $PREFIX. Your settings are kept in ~/.config/sysmon (delete that folder to remove them)."
     exit 0
@@ -49,9 +51,10 @@ else
     SRC=target/release/sysmon
 fi
 
-mkdir -p "$PREFIX/bin" "$APPS" "$ICONS/scalable/apps"
+mkdir -p "$PREFIX/bin" "$APPS" "$ICONS/scalable/apps" "$META"
 install -m 755 "$SRC" "$BIN"
 install -m 644 packaging/sysmon.svg "$ICONS/scalable/apps/sysmon.svg"
+install -m 644 "packaging/$METAFILE" "$META/$METAFILE"
 # Point the launcher at the installed program, in case $PREFIX/bin is not on PATH.
 sed "s|^Exec=sysmon|Exec=$BIN|" packaging/sysmon.desktop > "$APPS/sysmon.desktop"
 chmod 644 "$APPS/sysmon.desktop"

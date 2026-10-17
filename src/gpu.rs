@@ -61,7 +61,7 @@ fn first_num<T: std::str::FromStr>(paths: &[PathBuf]) -> Option<T> {
     paths.iter().find_map(read_num)
 }
 
-fn in_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn in_path(program: &str) -> Option<PathBuf> {
     std::env::var_os("PATH")?.to_str()?.split(':').map(|d| Path::new(d).join(program)).find(|p| p.is_file())
 }
 
@@ -301,6 +301,80 @@ fn parse_nvidia_line(line: &str) -> Gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stats::tests::FakeSys;
+
+    fn card(sys: &FakeSys, driver: &str) -> Card {
+        Card {
+            dir: sys.0.clone(),
+            dev: sys.0.join("device"),
+            driver: driver.into(),
+            name: "Test GPU".into(),
+            rc6: None,
+        }
+    }
+
+    #[test]
+    fn amdgpu_readings() {
+        let sys = FakeSys::new("amdgpu");
+        sys.file("device/gpu_busy_percent", "37\n")
+            .file("device/mem_info_vram_used", "1073741824\n")
+            .file("device/mem_info_vram_total", "8589934592\n")
+            .file("device/pp_dpm_sclk", "0: 500Mhz\n1: 1800Mhz *\n2: 2615Mhz\n")
+            .file("device/hwmon/hwmon4/temp1_input", "52000\n")
+            .file("device/hwmon/hwmon4/power1_average", "45000000\n")
+            .file("device/hwmon/hwmon4/fan1_input", "1200\n")
+            .file("device/hwmon/hwmon4/pwm1", "102\n")
+            .file("device/hwmon/hwmon4/pwm1_max", "255\n");
+        let g = amd(&card(&sys, "amdgpu"));
+        assert_eq!(g.usage, Some(37.0));
+        assert_eq!(g.vram_used, Some(1 << 30));
+        assert_eq!(g.vram_total, Some(8 << 30));
+        assert_eq!(g.temp, Some(52.0));
+        assert_eq!(g.power_w, Some(45.0));
+        assert_eq!(g.freq_mhz, Some(1800.0), "the step marked * is the current clock");
+        assert_eq!(g.max_freq_mhz, Some(2615.0));
+        assert_eq!(g.fan_rpm, Some(1200));
+        assert_eq!(g.fan_pct, Some(40.0));
+        assert!(g.note.is_none());
+    }
+
+    #[test]
+    fn intel_busy_time_from_idle_counter() {
+        let sys = FakeSys::new("i915");
+        sys.file("gt_act_freq_mhz", "350\n")
+            .file("gt_RP0_freq_mhz", "1100\n")
+            .file("gt/gt0/rc6_residency_ms", "1000\n");
+        let mut c = card(&sys, "i915");
+        let first = intel(&mut c);
+        assert_eq!(first.usage, Some(0.0), "no rate yet on the first reading");
+        assert_eq!((first.freq_mhz, first.max_freq_mhz), (Some(350.0), Some(1100.0)));
+        // Idle the whole time: the counter grows as fast as the clock.
+        std::thread::sleep(Duration::from_millis(200));
+        sys.file("gt/gt0/rc6_residency_ms", "1200\n");
+        assert!(intel(&mut c).usage.unwrap() < 10.0);
+        // Never idle: the counter stands still.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(intel(&mut c).usage.unwrap() > 90.0);
+    }
+
+    #[test]
+    fn intel_without_idle_counter_says_why() {
+        let sys = FakeSys::new("xe");
+        sys.file("device/tile0/gt0/freq0/cur_freq", "800\n");
+        let g = intel(&mut card(&sys, "xe"));
+        assert_eq!(g.usage, None);
+        assert_eq!(g.freq_mhz, Some(800.0));
+        assert!(g.note.unwrap().contains("root"));
+    }
+
+    #[test]
+    fn other_drivers_report_name_and_temperature() {
+        let sys = FakeSys::new("nouveau");
+        sys.file("device/hwmon/hwmon2/temp1_input", "41000\n");
+        let g = generic(&card(&sys, "nouveau"));
+        assert_eq!(g.temp, Some(41.0));
+        assert!(g.note.unwrap().contains("nouveau"));
+    }
 
     #[test]
     fn nvidia_csv_is_parsed() {

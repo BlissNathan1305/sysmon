@@ -1,6 +1,6 @@
 [package]
 name = "sysmon"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.87"
 description = "A live system monitor for Linux: CPU, memory, GPU, temperatures, battery, disks, network and processes"
@@ -25,8 +25,9 @@ maintainer = "Samuel Nathaniel"
 copyright = "2026, Samuel Nathaniel"
 section = "utils"
 priority = "optional"
-depends = "$auto"
-recommends = "hwdata | pciutils"
+# The window libraries are loaded at run time, so $auto cannot see them.
+depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0"
+recommends = "libegl1 | libvulkan1, libgl1-mesa-dri, libnotify-bin, hwdata | pciutils, xdg-utils"
 suggests = "lm-sensors"
 extended-description = """\
 sysmon shows the live state of a Linux computer in one window: CPU and \
@@ -37,6 +38,7 @@ assets = [
     ["target/release/sysmon", "usr/bin/", "755"],
     ["packaging/sysmon.desktop", "usr/share/applications/", "644"],
     ["packaging/sysmon.svg", "usr/share/icons/hicolor/scalable/apps/sysmon.svg", "644"],
+    ["packaging/io.github.blissnathan1305.sysmon.metainfo.xml", "usr/share/metainfo/", "644"],
     ["README.md", "usr/share/doc/sysmon/README.md", "644"],
 ]
 
@@ -46,6 +48,23 @@ assets = [
     { source = "target/release/sysmon", dest = "/usr/bin/sysmon", mode = "755" },
     { source = "packaging/sysmon.desktop", dest = "/usr/share/applications/sysmon.desktop", mode = "644" },
     { source = "packaging/sysmon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/sysmon.svg", mode = "644" },
+    { source = "packaging/io.github.blissnathan1305.sysmon.metainfo.xml", dest = "/usr/share/metainfo/io.github.blissnathan1305.sysmon.metainfo.xml", mode = "644" },
     { source = "README.md", dest = "/usr/share/doc/sysmon/README.md", mode = "644", doc = true },
     { source = "LICENSE", dest = "/usr/share/licenses/sysmon/LICENSE", mode = "644", doc = true },
 ]
+
+# Library names differ between Fedora and openSUSE, so require the files
+# (sonames) the window needs; both distributions provide these.
+[package.metadata.generate-rpm.requires]
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXrandr.so.2()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"
+
+[package.metadata.generate-rpm.recommends]
+mesa-dri-drivers = "*"
+libnotify = "*"
+hwdata = "*"

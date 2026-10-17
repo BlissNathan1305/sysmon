@@ -1,0 +1,33 @@
+# Maintainer: Samuel Nathaniel <48740078+BlissNathan1305@users.noreply.github.com>
+pkgname=sysmon-bin
+_pkgname=sysmon
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Live system monitor: CPU, memory, GPU, temperatures, battery, disks, network and processes (prebuilt)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/BlissNathan1305/sysmon"
+license=('Apache-2.0')
+# The window libraries are loaded at run time, so they are listed by hand.
+depends=('gcc-libs' 'glibc' 'libx11' 'libxcursor' 'libxi' 'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'wayland')
+optdepends=('mesa: GPU-accelerated drawing'
+            'vulkan-icd-loader: Vulkan drawing'
+            'libnotify: desktop alerts'
+            'hwdata: graphics and network card names'
+            'xdg-utils: open the folder of an exported CSV'
+            'lm_sensors: detect more motherboard sensors')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source_x86_64=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-x86_64-linux.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-aarch64-linux.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  cd "$_pkgname-$pkgver-$CARCH-linux"
+  install -Dm755 sysmon "$pkgdir/usr/bin/sysmon"
+  install -Dm644 packaging/sysmon.desktop "$pkgdir/usr/share/applications/sysmon.desktop"
+  install -Dm644 packaging/sysmon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/sysmon.svg"
+  install -Dm644 packaging/io.github.blissnathan1305.sysmon.metainfo.xml -t "$pkgdir/usr/share/metainfo/"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

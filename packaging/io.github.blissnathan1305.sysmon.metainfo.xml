@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.blissnathan1305.sysmon</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>sysmon</name>
+  <summary>See what your computer is doing right now</summary>
+  <developer id="io.github.blissnathan1305">
+    <name>Samuel Nathaniel</name>
+  </developer>
+  <description>
+    <p>
+      sysmon shows the live state of a Linux computer in one window: processor
+      and per-core load, memory and swap, graphics card, temperatures and fans,
+      battery health, disks, network connections and every running process.
+    </p>
+    <ul>
+      <li>Graphs of the last two minutes for CPU, memory, temperature, disk and network</li>
+      <li>Graphics monitoring for AMD, NVIDIA and Intel</li>
+      <li>Battery charge, power draw, time left, health and charge cycles</li>
+      <li>A searchable process list with details (view only)</li>
+      <li>A hardware report you can copy into a help forum</li>
+      <li>Optional desktop alerts for a hot CPU, low battery, or full memory or disk</li>
+      <li>Export recent readings to a CSV file</li>
+    </ul>
+    <p>
+      It reads everything locally from the kernel, needs no root access and
+      sends nothing over the network.
+    </p>
+  </description>
+  <launchable type="desktop-id">sysmon.desktop</launchable>
+  <url type="homepage">https://github.com/BlissNathan1305/sysmon</url>
+  <url type="bugtracker">https://github.com/BlissNathan1305/sysmon/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Overview of the whole computer</caption>
+      <image>https://raw.githubusercontent.com/BlissNathan1305/sysmon/main/docs/screenshots/overview.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Processor load per core</caption>
+      <image>https://raw.githubusercontent.com/BlissNathan1305/sysmon/main/docs/screenshots/cpu.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Temperatures and battery</caption>
+      <image>https://raw.githubusercontent.com/BlissNathan1305/sysmon/main/docs/screenshots/sensors.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Hardware report</caption>
+      <image>https://raw.githubusercontent.com/BlissNathan1305/sysmon/main/docs/screenshots/system.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>System</category>
+    <category>Monitor</category>
+  </categories>
+  <keywords>
+    <keyword>cpu</keyword>
+    <keyword>gpu</keyword>
+    <keyword>memory</keyword>
+    <keyword>temperature</keyword>
+    <keyword>battery</keyword>
+    <keyword>task manager</keyword>
+  </keywords>
+  <provides>
+    <binary>sysmon</binary>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">900</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.3.0" date="2026-10-17">
+      <description>
+        <p>Settings tab, desktop alerts, CSV export, a remembered window size, software drawing on machines without a usable GPU driver, and correct package dependencies.</p>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-10-17">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -20,7 +20,7 @@ jobs:
         runner: ${{ fromJSON(github.event.repository.private && '["ubuntu-22.04"]' || '["ubuntu-22.04", "ubuntu-22.04-arm"]') }}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Tests
@@ -34,7 +34,7 @@ jobs:
           NAME="sysmon-$VERSION-$ARCH-linux"
           mkdir -p "dist/$NAME/packaging"
           cp target/release/sysmon install.sh README.md LICENSE "dist/$NAME/"
-          cp packaging/sysmon.desktop packaging/sysmon.svg "dist/$NAME/packaging/"
+          cp packaging/sysmon.desktop packaging/sysmon.svg packaging/*.metainfo.xml "dist/$NAME/packaging/"
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
       - name: Debian package
         run: |
@@ -49,7 +49,8 @@ jobs:
           ./target/release/sysmon --version
           tar -tzf dist/*.tar.gz
           dpkg-deb --info dist/*.deb
-      - uses: actions/upload-artifact@v4
+          dpkg-deb --contents dist/*.deb | grep -q metainfo
+      - uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.runner }}
           path: |
@@ -61,7 +62,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

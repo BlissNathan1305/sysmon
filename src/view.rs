@@ -10,9 +10,11 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Element, Font, Length, Theme};
 
+use crate::alerts::{self, Choice};
 use crate::graph::{Graph, Series};
+use crate::history::HISTORY;
 use crate::stats::{self, fmt_bytes, fmt_duration, fmt_rate, fmt_temp, fmt_temp_exact, Snapshot};
-use crate::{search_id, style, App, Message, SortBy, Tab, TempUnit, ThemeChoice, HISTORY, INTERVALS};
+use crate::{search_id, style, App, Message, SortBy, Tab, TempUnit, ThemeChoice, INTERVALS};
 
 const BOLD: Font = Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT };
 /// Most process rows drawn at once; more than this slows the window down.
@@ -34,13 +36,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
         Tab::Storage => storage_tab(app, &theme),
         Tab::Processes => processes_tab(app, &theme),
         Tab::System => system_tab(app, &theme),
+        Tab::Settings => settings_tab(app, &theme),
     };
     let body: Element<Message> = if tab == Tab::Processes {
         container(body).padding([12, 16, 16, 16]).into()
     } else {
         scrollable(container(body).padding([12, 16, 16, 16])).height(Length::Fill).into()
     };
-    column![header(app, tab, &theme), body].into()
+    let mut page = column![header(app, tab, &theme)];
+    if let Some(b) = &app.banner {
+        page = page.push(banner(b, &theme));
+    }
+    page.push(body).into()
 }
 
 // ---- small building blocks ----
@@ -480,7 +487,7 @@ fn overview<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
     column![
         grid(cards, per_row),
         link(card("Busiest processes", theme, rows), Tab::Processes),
-        muted("Click a card for details.  Ctrl+1–8 switch tabs, Ctrl+F searches processes, Ctrl+P pauses.", theme),
+        muted("Click a card for details.  Ctrl+1–9 switch tabs, Ctrl+F searches processes, Ctrl+P pauses, Ctrl+E exports history.", theme),
     ]
     .spacing(12)
     .into()
@@ -1271,4 +1278,137 @@ fn system_tab<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
         }
     }
     column![top, row![left, right].spacing(12)].spacing(12).into()
+}
+
+// ---- banner ----
+
+fn banner<'a>(b: &crate::Banner, theme: &Theme) -> Element<'a, Message> {
+    let mut r = row![text(&b.text).size(14).width(Length::Fill)].spacing(10).align_items(Alignment::Center);
+    if let Some(dir) = &b.folder {
+        r = r.push(
+            button(text("Open folder").size(13))
+                .padding([4, 12])
+                .style(iced::theme::Button::Secondary)
+                .on_press(Message::OpenFolder(dir.clone())),
+        );
+    }
+    r = r.push(
+        button(text("Dismiss").size(13)).padding([4, 12]).style(style::flat(true)).on_press(Message::DismissBanner),
+    );
+    container(r).padding([8, 16]).width(Length::Fill).style(style::banner(b.urgent, theme)).into()
+}
+
+// ---- settings ----
+
+fn settings_tab<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
+    let p = &app.prefs;
+    let setting = |label: &str, hint: &str, control: Element<'a, Message>| -> Element<'a, Message> {
+        row![column![text(label.to_string()).size(14), muted(hint, theme)].spacing(2).width(Length::Fill), control]
+            .spacing(16)
+            .align_items(Alignment::Center)
+            .into()
+    };
+    let appearance = card(
+        "Appearance and updates",
+        theme,
+        column![
+            setting(
+                "Theme",
+                "System theme follows your desktop's light or dark mode.",
+                pick_list(&ThemeChoice::ALL[..], Some(p.theme), Message::Theme).text_size(14).width(170).into()
+            ),
+            setting(
+                "Temperature unit",
+                "Used everywhere temperatures appear.",
+                pick_list(&[TempUnit::Celsius, TempUnit::Fahrenheit][..], Some(p.unit), Message::Unit)
+                    .text_size(14)
+                    .width(170)
+                    .into()
+            ),
+            setting(
+                "Refresh",
+                "How often readings are taken. Slower uses a little less power.",
+                pick_list(&INTERVALS[..], Some(p.interval), Message::Interval).text_size(14).width(170).into()
+            ),
+        ]
+        .spacing(14),
+    );
+
+    let rows = Column::with_children(alerts::Kind::ALL.into_iter().map(|kind| {
+        let limit = p.alerts.get(kind);
+        let choices: Vec<Choice> = kind.choices().iter().map(|v| Choice { kind, value: *v }).collect();
+        row![
+            checkbox(kind.label(), limit.on)
+                .on_toggle(move |on| Message::AlertOn(kind, on))
+                .text_size(14)
+                .size(16)
+                .width(Length::Fill),
+            pick_list(choices, Some(Choice { kind, value: limit.value }), Message::AlertValue).text_size(14).width(120),
+        ]
+        .spacing(16)
+        .align_items(Alignment::Center)
+        .into()
+    }))
+    .spacing(10);
+    let alerts_card = card(
+        "Alerts",
+        theme,
+        column![
+            muted(
+                "While sysmon is open, it shows a desktop notification when one of these happens. Temperature and memory must stay high for 15 seconds first, and each alert repeats at most every 10 minutes.",
+                theme
+            ),
+            rows,
+            row![
+                button(text("Send a test alert").size(13)).padding([5, 12]).style(iced::theme::Button::Secondary).on_press(Message::TestAlert),
+            ],
+        ]
+        .spacing(12),
+    );
+
+    let export = card(
+        "History",
+        theme,
+        column![
+            muted(
+                format!(
+                    "Save the last {} readings (CPU, memory, temperature, network, disk, graphics and each core) as a CSV file you can open in a spreadsheet. It goes to {}.",
+                    app.hist.times.len().max(1),
+                    tilde(&crate::history::download_dir())
+                ),
+                theme
+            ),
+            row![button(text("Export history to CSV").size(13)).padding([5, 12]).style(iced::theme::Button::Primary).on_press(Message::ExportCsv)],
+        ]
+        .spacing(12),
+    );
+
+    let config = crate::Prefs::path().map(|p| tilde(&p)).unwrap_or_else(|| "—".into());
+    let about = card(
+        "About",
+        theme,
+        column![
+            kv("Version", env!("CARGO_PKG_VERSION"), theme),
+            kv("Licence", "Apache-2.0", theme),
+            kv("Source", env!("CARGO_PKG_REPOSITORY"), theme),
+            kv("Settings file", config, theme),
+            muted("sysmon reads everything locally from /proc and /sys. It needs no root access and sends nothing over the network.", theme),
+        ]
+        .spacing(8),
+    );
+    row![
+        column![appearance, alerts_card].spacing(12).width(Length::Fill),
+        column![export, about].spacing(12).width(Length::Fill)
+    ]
+    .spacing(12)
+    .into()
+}
+
+/// A path with the home folder written as ~, as people expect to read it.
+pub fn tilde(p: &std::path::Path) -> String {
+    let shown = p.display().to_string();
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && shown.starts_with(&home) => format!("~{}", &shown[home.len()..]),
+        _ => shown,
+    }
 }
