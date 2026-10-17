@@ -20,7 +20,7 @@ jobs:
         runner: ${{ fromJSON(github.event.repository.private && '["ubuntu-22.04"]' || '["ubuntu-22.04", "ubuntu-22.04-arm"]') }}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Tests
