@@ -1,0 +1,75 @@
+name: Release
+
+# Push a tag such as v0.2.0 to build the downloads and attach them to a
+# GitHub release: a .tar.gz with an installer, a .deb and an .rpm.
+#
+# Builds run on Ubuntu 22.04 so the program needs only glibc 2.35, which
+# covers most distributions from 2022 on. ARM64 builds are added once the
+# repository is public (GitHub's free ARM runners are for public repos).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        runner: ${{ fromJSON(github.event.repository.private && '["ubuntu-22.04"]' || '["ubuntu-22.04", "ubuntu-22.04-arm"]') }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --release --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH="$(uname -m)"
+          NAME="sysmon-$VERSION-$ARCH-linux"
+          mkdir -p "dist/$NAME/packaging"
+          cp target/release/sysmon install.sh README.md LICENSE "dist/$NAME/"
+          cp packaging/sysmon.desktop packaging/sysmon.svg "dist/$NAME/packaging/"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+      - name: Debian package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb --no-build --output dist/
+      - name: RPM package
+        run: |
+          cargo install cargo-generate-rpm --locked
+          cargo generate-rpm --output dist/
+      - name: Smoke test
+        run: |
+          ./target/release/sysmon --version
+          tar -tzf dist/*.tar.gz
+          dpkg-deb --info dist/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.runner }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "sysmon ${GITHUB_REF_NAME#v}" --generate-notes dist/*

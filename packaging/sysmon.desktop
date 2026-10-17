@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=System Monitor (sysmon)
+GenericName=System Monitor
+Comment=Live CPU, memory, graphics, temperature, battery, disk, network and process view
+Exec=sysmon
+Icon=sysmon
+Terminal=false
+Categories=System;Monitor;
+Keywords=cpu;gpu;memory;ram;temperature;battery;disk;network;process;task manager;hardware;
+StartupWMClass=sysmon

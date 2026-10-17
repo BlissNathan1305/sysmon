@@ -1,0 +1,51 @@
+[package]
+name = "sysmon"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.87"
+description = "A live system monitor for Linux: CPU, memory, GPU, temperatures, battery, disks, network and processes"
+authors = ["Samuel Nathaniel"]
+license = "Apache-2.0"
+repository = "https://github.com/BlissNathan1305/sysmon"
+readme = "README.md"
+keywords = ["system-monitor", "linux", "gui", "iced", "hardware"]
+categories = ["command-line-utilities", "os::linux-apis"]
+
+[dependencies]
+iced = { version = "0.12", features = ["tokio", "canvas"] }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = "thin"
+
+[package.metadata.deb]
+maintainer = "Samuel Nathaniel"
+copyright = "2026, Samuel Nathaniel"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+recommends = "hwdata | pciutils"
+suggests = "lm-sensors"
+extended-description = """\
+sysmon shows the live state of a Linux computer in one window: CPU and \
+per-core use, memory and swap, graphics (Intel, AMD and NVIDIA), \
+temperatures and fans, battery health, disks, network interfaces and a \
+searchable process list, plus a copyable hardware report."""
+assets = [
+    ["target/release/sysmon", "usr/bin/", "755"],
+    ["packaging/sysmon.desktop", "usr/share/applications/", "644"],
+    ["packaging/sysmon.svg", "usr/share/icons/hicolor/scalable/apps/sysmon.svg", "644"],
+    ["README.md", "usr/share/doc/sysmon/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Live system monitor for Linux"
+assets = [
+    { source = "target/release/sysmon", dest = "/usr/bin/sysmon", mode = "755" },
+    { source = "packaging/sysmon.desktop", dest = "/usr/share/applications/sysmon.desktop", mode = "644" },
+    { source = "packaging/sysmon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/sysmon.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/sysmon/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/sysmon/LICENSE", mode = "644", doc = true },
+]
