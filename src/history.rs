@@ -142,11 +142,13 @@ pub fn download_dir() -> PathBuf {
     [from_dirs, Some(home.join("Downloads"))].into_iter().flatten().find(|p| p.is_dir()).unwrap_or(home)
 }
 
-/// Writes the history to sysmon-history-<date>-<time>.csv in `dir`.
-pub fn save_csv(history: &History, dir: &Path) -> std::io::Result<PathBuf> {
+/// Writes the history to sysmon-history-<machine>-<date>-<time>.csv in `dir`.
+pub fn save_csv(history: &History, dir: &Path, machine: &str) -> std::io::Result<PathBuf> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let stamp: String = local_time(now).chars().filter(|c| c.is_ascii_digit() || *c == ' ').collect();
-    let path = dir.join(format!("sysmon-history-{}.csv", stamp.replace(' ', "-")));
+    let machine: String =
+        machine.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let path = dir.join(format!("sysmon-history-{machine}-{}.csv", stamp.replace(' ', "-")));
     let mut f = std::fs::File::create(&path)?;
     f.write_all(history.to_csv().as_bytes())?;
     Ok(path)
@@ -190,8 +192,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut h = History::default();
         h.record(&Snapshot::default());
-        let path = save_csv(&h, &dir).unwrap();
-        assert!(path.file_name().unwrap().to_string_lossy().starts_with("sysmon-history-"));
+        let path = save_csv(&h, &dir, "web 1").unwrap();
+        assert!(path.file_name().unwrap().to_string_lossy().starts_with("sysmon-history-web_1-"));
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
         std::fs::remove_dir_all(dir).unwrap();
     }

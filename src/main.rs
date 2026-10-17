@@ -6,6 +6,7 @@ mod gpu;
 mod graph;
 mod history;
 mod pci;
+mod remote;
 mod report;
 mod stats;
 mod style;
@@ -35,6 +36,10 @@ Usage: sysmon [OPTIONS]
 Options:
   -h, --help       Show this help and exit
   -V, --version    Show the version and exit
+  --agent [--interval MS]
+                   Run headless and print readings as JSON lines. This is what
+                   the window starts over SSH to watch a server; you do not
+                   normally run it yourself.
 
 Keyboard shortcuts in the window:
   Ctrl+1 … Ctrl+9  Switch tabs
@@ -48,8 +53,19 @@ Settings are kept in $XDG_CONFIG_HOME/sysmon/settings.conf
 (usually ~/.config/sysmon/settings.conf).";
 
 pub fn main() -> iced::Result {
-    if let Some(arg) = std::env::args().nth(1) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(arg) = args.first() {
         match arg.as_str() {
+            "--agent" => {
+                let ms = args
+                    .iter()
+                    .position(|a| a == "--interval")
+                    .and_then(|i| args.get(i + 1))
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(1000)
+                    .clamp(250, 60_000);
+                std::process::exit(remote::run_agent(Duration::from_millis(ms)));
+            }
             "-h" | "--help" => {
                 println!("{HELP}");
                 return Ok(());
@@ -276,6 +292,9 @@ struct Prefs {
     /// Last window size in logical pixels.
     window: Option<(u32, u32)>,
     alerts: alerts::Settings,
+    servers: Vec<remote::Server>,
+    /// The server watched last time, or None for this computer.
+    source: Option<String>,
 }
 
 impl Prefs {
@@ -297,6 +316,8 @@ impl Prefs {
             show_virtual: false,
             window: None,
             alerts: alerts::Settings::default(),
+            servers: Vec::new(),
+            source: None,
         };
         if let Some(text) = Self::path().and_then(|f| std::fs::read_to_string(f).ok()) {
             for line in text.lines() {
@@ -309,7 +330,8 @@ impl Prefs {
                         }
                     }
                     Some(("interval_ms", v)) => {
-                        if let Some(i) = v.parse().ok().and_then(|ms| INTERVALS.into_iter().find(|i| i.0 == ms)) {
+                        if let Some(i) = v.parse::<u64>().ok().and_then(|ms| INTERVALS.into_iter().find(|i| i.0 == ms))
+                        {
                             p.interval = i;
                         }
                     }
@@ -317,6 +339,12 @@ impl Prefs {
                     Some(("unit", v)) => p.unit = if v == "f" { TempUnit::Fahrenheit } else { TempUnit::Celsius },
                     Some(("show_kernel_threads", v)) => p.show_kernel = v == "true",
                     Some(("show_virtual_interfaces", v)) => p.show_virtual = v == "true",
+                    Some(("server", v)) => {
+                        if let Some(server) = remote::Server::from_pref(v) {
+                            p.servers.push(server);
+                        }
+                    }
+                    Some(("source", v)) => p.source = Some(v.to_string()),
                     Some(("window", v)) => {
                         p.window = v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
                     }
@@ -357,6 +385,12 @@ impl Prefs {
             self.show_kernel,
             self.show_virtual,
         );
+        for server in &self.servers {
+            body.push_str(&format!("server={}\n", server.to_pref()));
+        }
+        if let Some(name) = &self.source {
+            body.push_str(&format!("source={name}\n"));
+        }
         if let Some((w, h)) = self.window {
             body.push_str(&format!("window={w}x{h}\n"));
         }
@@ -429,7 +463,58 @@ enum Message {
     ExportCsv,
     OpenFolder(PathBuf),
     DismissBanner,
+    PickSource(SourceChoice),
+    Remote(remote::Event),
+    Retry,
+    InstallAgent,
+    Installed(Option<Result<String, String>>),
+    FormName(String),
+    FormTarget(String),
+    FormPort(String),
+    FormKey(String),
+    AddServer,
+    RemoveServer(usize),
+    ConnectServer(usize),
     Quit,
+}
+
+/// Which machine the window is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Local,
+    Remote(usize),
+}
+
+/// An entry in the header's machine picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceChoice {
+    source: Option<Source>,
+    label: String,
+}
+
+impl fmt::Display for SourceChoice {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// The state of the connection to a server.
+#[derive(Debug, Clone, PartialEq)]
+enum Link {
+    Connecting,
+    Live,
+    Installing,
+    Failed(remote::Failure),
+}
+
+/// What has been typed into the "Add a server" form.
+#[derive(Debug, Clone, Default)]
+struct ServerForm {
+    name: String,
+    target: String,
+    port: String,
+    key: String,
+    error: Option<String>,
 }
 
 /// A message across the top of the window: an alert, or where a file went.
@@ -464,6 +549,16 @@ struct App {
     banner: Option<Banner>,
     /// When the window was last resized, until the new size is saved.
     resized_at: Option<Instant>,
+    source: Source,
+    link: Link,
+    /// Bumped to start a fresh connection.
+    attempt: u32,
+    /// This computer's details, kept while a server is shown.
+    local_info: StaticInfo,
+    local_uid: u32,
+    /// The sysmon version running on the server being watched.
+    agent_version: Option<String>,
+    form: ServerForm,
 }
 
 fn search_id() -> text_input::Id {
@@ -507,10 +602,70 @@ impl App {
     /// Re-reads the hardware report when the System tab is open and the
     /// copy is missing or older than ten seconds (it is mostly static).
     fn refresh_report(&mut self) {
-        if self.prefs.tab == Tab::System && self.report.as_ref().is_none_or(|r| r.0.elapsed() > Duration::from_secs(10))
+        // A server sends its own report.
+        if self.source == Source::Local
+            && self.prefs.tab == Tab::System
+            && self.report.as_ref().is_none_or(|r| r.0.elapsed() > Duration::from_secs(10))
         {
             self.report = Some((Instant::now(), report::gather(&self.info, &self.snap)));
         }
+    }
+
+    fn server(&self) -> Option<&remote::Server> {
+        match self.source {
+            Source::Remote(i) => self.prefs.servers.get(i),
+            Source::Local => None,
+        }
+    }
+
+    /// Starts showing another machine, with fresh graphs.
+    fn switch(&mut self, source: Source) -> Command<Message> {
+        self.source = source;
+        self.hist = History::default();
+        self.snap = Arc::new(Snapshot::default());
+        self.report = None;
+        self.watcher = alerts::Watcher::default();
+        self.selected = None;
+        self.agent_version = None;
+        self.attempt += 1;
+        self.prefs.source = self.server().map(|s| s.name.clone());
+        self.prefs.save();
+        match source {
+            Source::Local => {
+                self.info = self.local_info.clone();
+                self.my_uid = self.local_uid;
+                self.link = Link::Live;
+                self.busy = true;
+                sample(self.collector.clone(), Duration::ZERO)
+            }
+            Source::Remote(_) => {
+                // Until the server answers, show what we know: its name and address.
+                let (name, target) = self.server().map(|s| (s.name.clone(), s.target.clone())).unwrap_or_default();
+                self.info = StaticInfo { hostname: name, os: target, ..Default::default() };
+                self.my_uid = u32::MAX;
+                self.link = Link::Connecting;
+                Command::none()
+            }
+        }
+    }
+
+    /// Takes in a new reading from whichever machine is shown.
+    fn accept(&mut self, s: Arc<Snapshot>) -> Command<Message> {
+        if !self.paused {
+            self.hist.record(&s);
+            self.snap = s;
+            self.refresh_report();
+        }
+        let mut fired = self.watcher.check(&self.prefs.alerts, &self.snap, Instant::now());
+        if let Some(server) = self.server() {
+            for a in &mut fired {
+                a.title = format!("{}: {}", server.name, a.title);
+            }
+        }
+        if let Some(first) = fired.first() {
+            self.show_banner(format!("{}: {}", first.title, first.body), first.urgent, None);
+        }
+        Command::batch(fired.into_iter().map(|a| off_thread(move || Some(alerts::notify(&a)), Message::Notified)))
     }
 
     fn show_banner(&mut self, text: String, urgent: bool, folder: Option<PathBuf>) {
@@ -537,7 +692,16 @@ impl Application for App {
         let mut collector = Collector::new(info.cpu_threads);
         // The first reading only sets the baseline that rates are measured from.
         let snap = Arc::new(collector.sample());
-        let app = App {
+        // SAFETY: getuid cannot fail.
+        let uid = unsafe { libc::getuid() };
+        let mut app = App {
+            local_info: info.clone(),
+            local_uid: uid,
+            source: Source::Local,
+            link: Link::Live,
+            attempt: 0,
+            form: ServerForm::default(),
+            agent_version: None,
             info,
             collector: Arc::new(Mutex::new(collector)),
             snap,
@@ -552,8 +716,7 @@ impl Application for App {
             desc: true,
             mine_only: false,
             selected: None,
-            // SAFETY: getuid cannot fail.
-            my_uid: unsafe { libc::getuid() },
+            my_uid: uid,
             width: 1180,
             copied: None,
             report: None,
@@ -561,13 +724,21 @@ impl Application for App {
             banner: None,
             resized_at: None,
         };
+        // Go back to the server watched last time, if it is still saved.
+        let saved = app.prefs.source.as_ref().and_then(|n| app.prefs.servers.iter().position(|s| &s.name == n));
+        if let Some(i) = saved {
+            let _ = app.switch(Source::Remote(i));
+        }
         // A second reading straight away so the numbers fill in quickly.
         let first = sample(app.collector.clone(), Duration::from_millis(400));
         (app, Command::batch([first, off_thread(system_prefers_dark, Message::SystemDark)]))
     }
 
     fn title(&self) -> String {
-        format!("System Monitor — {}", self.info.hostname)
+        match self.source {
+            Source::Local => format!("System Monitor — {}", self.info.hostname),
+            Source::Remote(_) => format!("System Monitor — {} (remote)", self.info.hostname),
+        }
     }
 
     fn theme(&self) -> Theme {
@@ -582,7 +753,7 @@ impl Application for App {
         match message {
             Message::Tick => {
                 let mut cmds = Vec::new();
-                if !self.paused && !self.busy {
+                if self.source == Source::Local && !self.paused && !self.busy {
                     self.busy = true;
                     cmds.push(sample(self.collector.clone(), Duration::ZERO));
                 }
@@ -603,21 +774,9 @@ impl Application for App {
             }
             Message::Sampled(snap) => {
                 self.busy = false;
-                if let Some(s) = snap {
-                    if !self.paused {
-                        self.hist.record(&s);
-                        self.snap = s;
-                        self.refresh_report();
-                    }
-                    let fired = self.watcher.check(&self.prefs.alerts, &self.snap, Instant::now());
-                    if let Some(first) = fired.first() {
-                        self.show_banner(format!("{}: {}", first.title, first.body), first.urgent, None);
-                    }
-                    let sends: Vec<_> = fired
-                        .into_iter()
-                        .map(|a| off_thread(move || Some(alerts::notify(&a)), Message::Notified))
-                        .collect();
-                    return Command::batch(sends);
+                // A reading that finishes after switching to a server is dropped.
+                if let (Some(s), Source::Local) = (snap, self.source) {
+                    return self.accept(s);
                 }
             }
             Message::Tab(t) => {
@@ -679,7 +838,11 @@ impl Application for App {
             }
             Message::CopyReport => {
                 self.copied = Some(Instant::now());
-                return clipboard::write(report::to_text(&report::gather(&self.info, &self.snap)));
+                let sections = match (&self.report, self.source) {
+                    (Some((_, r)), Source::Remote(_)) => r.clone(),
+                    _ => report::gather(&self.info, &self.snap),
+                };
+                return clipboard::write(report::to_text(&sections));
             }
             Message::Resized(w, h) => {
                 self.width = w;
@@ -718,7 +881,7 @@ impl Application for App {
             }
             Message::ExportCsv => {
                 let dir = history::download_dir();
-                match history::save_csv(&self.hist, &dir) {
+                match history::save_csv(&self.hist, &dir, &self.info.hostname) {
                     Ok(path) => self.show_banner(format!("History saved to {}", view::tilde(&path)), false, Some(dir)),
                     Err(e) => self.show_banner(format!("Could not save the history: {e}"), true, None),
                 }
@@ -733,6 +896,95 @@ impl Application for App {
                 }
             }
             Message::DismissBanner => self.banner = None,
+            Message::PickSource(choice) => match choice.source {
+                Some(src) if src != self.source => return self.switch(src),
+                Some(_) => {}
+                // "Add a server…"
+                None => {
+                    self.prefs.tab = Tab::Settings;
+                    self.prefs.save();
+                }
+            },
+            Message::Remote(event) => {
+                // Ignore anything still arriving from a connection just left.
+                if self.source == Source::Local {
+                    return Command::none();
+                }
+                match event {
+                    remote::Event::Hello { info, uid, version } => {
+                        self.agent_version = Some(version);
+                        self.info = info;
+                        self.my_uid = uid;
+                        self.link = Link::Live;
+                    }
+                    remote::Event::Snapshot(s) => return self.accept(s),
+                    remote::Event::Report(r) => self.report = Some((Instant::now(), r)),
+                    remote::Event::Failed(f) => self.link = Link::Failed(f),
+                }
+            }
+            Message::Retry => {
+                self.attempt += 1;
+                self.link = Link::Connecting;
+            }
+            Message::InstallAgent => {
+                if let Some(server) = self.server().cloned() {
+                    self.link = Link::Installing;
+                    let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/proc/self/exe"));
+                    return off_thread(move || Some(remote::install(&server, &program)), Message::Installed);
+                }
+            }
+            Message::Installed(result) => match result {
+                Some(Ok(version)) => {
+                    let name = self.server().map(|s| s.name.clone()).unwrap_or_default();
+                    self.show_banner(format!("Installed {version} on {name}."), false, None);
+                    self.attempt += 1;
+                    self.link = Link::Connecting;
+                }
+                Some(Err(e)) => self.link = Link::Failed(remote::Failure::Other(e)),
+                None => {
+                    self.link = Link::Failed(remote::Failure::Other("The installation stopped unexpectedly.".into()))
+                }
+            },
+            Message::FormName(v) => self.form.name = v,
+            Message::FormTarget(v) => self.form.target = v,
+            Message::FormPort(v) => self.form.port = v,
+            Message::FormKey(v) => self.form.key = v,
+            Message::AddServer => {
+                let f = &self.form;
+                match remote::Server::new(&f.name, &f.target, &f.port, &f.key) {
+                    Ok(server) if self.prefs.servers.iter().any(|s| s.name == server.name) => {
+                        self.form.error = Some(format!("A server called {} is already saved.", server.name));
+                    }
+                    Ok(server) => {
+                        self.prefs.servers.push(server);
+                        self.form = ServerForm::default();
+                        self.prefs.tab = Tab::Overview;
+                        return self.switch(Source::Remote(self.prefs.servers.len() - 1));
+                    }
+                    Err(e) => self.form.error = Some(e),
+                }
+            }
+            Message::RemoveServer(i) => {
+                if i < self.prefs.servers.len() {
+                    let cmd = match self.source {
+                        Source::Remote(j) if j == i => self.switch(Source::Local),
+                        Source::Remote(j) if j > i => {
+                            self.source = Source::Remote(j - 1);
+                            Command::none()
+                        }
+                        _ => Command::none(),
+                    };
+                    self.prefs.servers.remove(i);
+                    self.prefs.save();
+                    return cmd;
+                }
+            }
+            Message::ConnectServer(i) => {
+                if i < self.prefs.servers.len() {
+                    self.prefs.tab = Tab::Overview;
+                    return self.switch(Source::Remote(i));
+                }
+            }
             Message::Quit => {
                 if self.resized_at.is_some() {
                     self.prefs.save();
@@ -744,7 +996,14 @@ impl Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let remote = match (self.server(), &self.link) {
+            (Some(server), Link::Connecting | Link::Live) => {
+                remote::subscription(server.clone(), self.prefs.interval.0, self.attempt).map(Message::Remote)
+            }
+            _ => Subscription::none(),
+        };
         Subscription::batch([
+            remote,
             time::every(Duration::from_millis(self.prefs.interval.0)).map(|_| Message::Tick),
             keyboard::on_key_press(on_key),
             event::listen_with(|e, _| match e {

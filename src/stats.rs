@@ -13,6 +13,8 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use crate::gpu::{self, Gpu};
 
 pub(crate) fn read(p: impl AsRef<Path>) -> Option<String> {
@@ -47,7 +49,7 @@ pub fn fmt_temp_exact(c: f32) -> String {
 }
 
 /// Things that do not change while the program runs.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StaticInfo {
     pub hostname: String,
     pub os: String,
@@ -115,7 +117,7 @@ impl StaticInfo {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Memory {
     pub total: u64,
     pub available: u64,
@@ -137,7 +139,7 @@ impl Memory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Temp {
     pub chip: String,
     pub label: String,
@@ -146,13 +148,13 @@ pub struct Temp {
     pub crit: Option<f32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fan {
     pub label: String,
     pub rpm: u32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Battery {
     pub name: String,
     pub model: String,
@@ -173,7 +175,7 @@ pub struct Battery {
 }
 
 /// A battery in a wireless mouse, keyboard, headset or similar.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceBattery {
     pub name: String,
     pub percent: Option<f32>,
@@ -181,7 +183,7 @@ pub struct DeviceBattery {
     pub status: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mount {
     pub device: String,
     pub mount: String,
@@ -197,7 +199,7 @@ impl Mount {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskIo {
     pub name: String,
     pub read_bps: f64,
@@ -206,7 +208,7 @@ pub struct DiskIo {
     pub write_total: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Net {
     pub name: String,
     pub up: bool,
@@ -224,7 +226,7 @@ pub struct Net {
     pub link_quality: Option<f32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proc {
     pub pid: u32,
     pub ppid: u32,
@@ -245,7 +247,7 @@ pub struct Proc {
 }
 
 /// One full reading of the machine.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub cpu_total: f32,
     pub cpu_cores: Vec<f32>,

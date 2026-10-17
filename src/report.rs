@@ -8,7 +8,8 @@ use std::path::Path;
 use crate::pci;
 use crate::stats::{fmt_bytes, fmt_duration, read, read_num, read_trim, Snapshot, StaticInfo};
 
-pub type Section = (&'static str, Vec<(String, String)>);
+/// A titled group of label/value rows. Owned, so it can come from a remote agent.
+pub type Section = (String, Vec<(String, String)>);
 
 fn chassis(code: u32) -> &'static str {
     match code {
@@ -335,7 +336,7 @@ pub fn gather(info: &StaticInfo, s: &Snapshot) -> Vec<Section> {
             .collect();
         sections.push(("Battery", rows));
     }
-    sections
+    sections.into_iter().map(|(title, rows)| (title.to_string(), rows)).collect()
 }
 
 pub fn to_text(sections: &[Section]) -> String {

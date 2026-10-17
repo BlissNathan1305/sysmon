@@ -13,8 +13,11 @@ use iced::{Alignment, Color, Element, Font, Length, Theme};
 use crate::alerts::{self, Choice};
 use crate::graph::{Graph, Series};
 use crate::history::HISTORY;
+use crate::remote::Failure;
 use crate::stats::{self, fmt_bytes, fmt_duration, fmt_rate, fmt_temp, fmt_temp_exact, Snapshot};
-use crate::{search_id, style, App, Message, SortBy, Tab, TempUnit, ThemeChoice, INTERVALS};
+use crate::{
+    search_id, style, App, Link, Message, SortBy, Source, SourceChoice, Tab, TempUnit, ThemeChoice, INTERVALS,
+};
 
 const BOLD: Font = Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT };
 /// Most process rows drawn at once; more than this slows the window down.
@@ -27,16 +30,22 @@ type Text<'a> = text::Text<'a, Theme, iced::Renderer>;
 pub fn view(app: &App) -> Element<'_, Message> {
     let theme = iced::Application::theme(app);
     let tab = if app.tabs().contains(&app.prefs.tab) { app.prefs.tab } else { Tab::Overview };
-    let body: Element<Message> = match tab {
-        Tab::Overview => overview(app, &theme),
-        Tab::Cpu => cpu_tab(app, &theme),
-        Tab::Memory => memory_tab(app, &theme),
-        Tab::Gpu => gpu_tab(app, &theme),
-        Tab::Sensors => sensors_tab(app, &theme),
-        Tab::Storage => storage_tab(app, &theme),
-        Tab::Processes => processes_tab(app, &theme),
-        Tab::System => system_tab(app, &theme),
-        Tab::Settings => settings_tab(app, &theme),
+    // A server with no reading yet: say so rather than showing zeros.
+    let waiting = app.source != Source::Local && app.hist.times.is_empty() && tab != Tab::Settings;
+    let body: Element<Message> = if waiting {
+        waiting_panel(app, &theme)
+    } else {
+        match tab {
+            Tab::Overview => overview(app, &theme),
+            Tab::Cpu => cpu_tab(app, &theme),
+            Tab::Memory => memory_tab(app, &theme),
+            Tab::Gpu => gpu_tab(app, &theme),
+            Tab::Sensors => sensors_tab(app, &theme),
+            Tab::Storage => storage_tab(app, &theme),
+            Tab::Processes => processes_tab(app, &theme),
+            Tab::System => system_tab(app, &theme),
+            Tab::Settings => settings_tab(app, &theme),
+        }
     };
     let body: Element<Message> = if tab == Tab::Processes {
         container(body).padding([12, 16, 16, 16]).into()
@@ -44,6 +53,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
         scrollable(container(body).padding([12, 16, 16, 16])).height(Length::Fill).into()
     };
     let mut page = column![header(app, tab, &theme)];
+    if let Some(strip) = connection_strip(app, &theme) {
+        page = page.push(strip);
+    }
     if let Some(b) = &app.banner {
         page = page.push(banner(b, &theme));
     }
@@ -246,8 +258,20 @@ fn header<'a>(app: &'a App, current: Tab, theme: &Theme) -> Element<'a, Message>
     ]
     .spacing(14)
     .align_items(Alignment::Center);
+    // "This computer", each saved server, and a shortcut to add one.
+    let mut choices = vec![SourceChoice { source: Some(Source::Local), label: "This computer".into() }];
+    choices.extend(
+        app.prefs
+            .servers
+            .iter()
+            .enumerate()
+            .map(|(i, s)| SourceChoice { source: Some(Source::Remote(i)), label: format!("Server: {}", s.name) }),
+    );
+    choices.push(SourceChoice { source: None, label: "Add a server…".into() });
+    let current_choice = choices.iter().find(|c| c.source == Some(app.source)).cloned();
     let controls = row![
-        muted(format!("Up {}", fmt_duration(app.snap.uptime)), theme),
+        pick_list(choices, current_choice, Message::PickSource).text_size(13).padding([4, 8]).width(190),
+        muted(if app.snap.uptime > 0 { format!("Up {}", fmt_duration(app.snap.uptime)) } else { String::new() }, theme),
         pick_list(&INTERVALS[..], Some(app.prefs.interval), Message::Interval).text_size(13).padding([4, 8]),
         pick_list(&[TempUnit::Celsius, TempUnit::Fahrenheit][..], Some(app.prefs.unit), Message::Unit)
             .text_size(13)
@@ -1245,8 +1269,18 @@ fn system_tab<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
     let top = container(
         row![
             column![
-                text("About this computer").size(16).font(BOLD),
-                muted("Copy this report into a help forum or support request. Your computer name and network hardware addresses are left out.", theme),
+                text(if app.source == Source::Local { "About this computer" } else { "About this server" })
+                    .size(16)
+                    .font(BOLD),
+                muted(
+                    match &app.agent_version {
+                        Some(v) if app.source != Source::Local => format!(
+                            "Read through SSH from sysmon {v} on the server. Copy this report into a help request; the machine's name and network hardware addresses are left out."
+                        ),
+                        _ => "Copy this report into a help forum or support request. Your computer name and network hardware addresses are left out.".into(),
+                    },
+                    theme
+                ),
             ]
             .spacing(4)
             .width(Length::Fill),
@@ -1392,13 +1426,13 @@ fn settings_tab<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
             kv("Licence", "Apache-2.0", theme),
             kv("Source", env!("CARGO_PKG_REPOSITORY"), theme),
             kv("Settings file", config, theme),
-            muted("sysmon reads everything locally from /proc and /sys. It needs no root access and sends nothing over the network.", theme),
+            muted("sysmon reads everything locally from /proc and /sys and needs no root access. It sends nothing over the network; servers are read through your own SSH connection.", theme),
         ]
         .spacing(8),
     );
     row![
         column![appearance, alerts_card].spacing(12).width(Length::Fill),
-        column![export, about].spacing(12).width(Length::Fill)
+        column![servers_card(app, theme), export, about].spacing(12).width(Length::Fill)
     ]
     .spacing(12)
     .into()
@@ -1411,4 +1445,161 @@ pub fn tilde(p: &std::path::Path) -> String {
         Ok(home) if !home.is_empty() && shown.starts_with(&home) => format!("~{}", &shown[home.len()..]),
         _ => shown,
     }
+}
+
+// ---- remote servers ----
+
+/// Shown under the tabs while a server is connecting, installing or failed.
+fn connection_strip<'a>(app: &'a App, theme: &Theme) -> Option<Element<'a, Message>> {
+    let server = app.server()?;
+    let back = button(text("Back to this computer").size(13))
+        .padding([4, 12])
+        .style(iced::theme::Button::Secondary)
+        .on_press(Message::PickSource(SourceChoice { source: Some(Source::Local), label: String::new() }));
+    let action = |label: &str, msg: Message| {
+        button(text(label.to_string()).size(13)).padding([4, 12]).style(iced::theme::Button::Primary).on_press(msg)
+    };
+    let (message, urgent, buttons): (String, bool, Vec<Element<'a, Message>>) = match &app.link {
+        Link::Live => return None,
+        Link::Connecting => (format!("Connecting to {} ({})…", server.name, server.target), false, vec![back.into()]),
+        Link::Installing => {
+            (format!("Installing sysmon on {}… This downloads about 5 MB on the server.", server.name), false, vec![])
+        }
+        Link::Failed(Failure::NotInstalled) => (
+            format!(
+                "sysmon is not installed on {}. It can be installed in your home folder there (no root needed).",
+                server.name
+            ),
+            true,
+            vec![action("Install on server", Message::InstallAgent).into(), back.into()],
+        ),
+        Link::Failed(Failure::Outdated(v)) => (
+            format!(
+                "{} has sysmon {v}, which cannot talk to this version ({}).",
+                server.name,
+                env!("CARGO_PKG_VERSION")
+            ),
+            true,
+            vec![action("Update sysmon on server", Message::InstallAgent).into(), back.into()],
+        ),
+        Link::Failed(Failure::Other(e)) => {
+            (format!("{}: {e}", server.name), true, vec![action("Try again", Message::Retry).into(), back.into()])
+        }
+    };
+    let mut r = row![text(message).size(14).width(Length::Fill)].spacing(10).align_items(Alignment::Center);
+    for b in buttons {
+        r = r.push(b);
+    }
+    Some(container(r).padding([8, 16]).width(Length::Fill).style(style::banner(urgent, theme)).into())
+}
+
+fn servers_card<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
+    let f = &app.form;
+    let list: Element<'a, Message> = if app.prefs.servers.is_empty() {
+        muted("No servers yet.", theme).into()
+    } else {
+        Column::with_children(app.prefs.servers.iter().enumerate().map(|(i, s)| {
+            let detail = [
+                Some(s.target.clone()),
+                s.port.map(|p| format!("port {p}")),
+                s.identity.as_ref().map(|k| format!("key {k}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+            let watching = app.source == Source::Remote(i);
+            row![
+                column![text(&s.name).size(14).font(BOLD), muted(detail, theme)].spacing(2).width(Length::Fill),
+                button(text(if watching { "Watching" } else { "Connect" }).size(13))
+                    .padding([4, 12])
+                    .style(if watching { iced::theme::Button::Secondary } else { iced::theme::Button::Primary })
+                    .on_press_maybe((!watching).then_some(Message::ConnectServer(i))),
+                button(text("Remove").size(13))
+                    .padding([4, 12])
+                    .style(style::flat(true))
+                    .on_press(Message::RemoveServer(i)),
+            ]
+            .spacing(8)
+            .align_items(Alignment::Center)
+            .into()
+        }))
+        .spacing(10)
+        .into()
+    };
+    let field = |label: &str, placeholder: &str, value: &str, msg: fn(String) -> Message| -> Element<'a, Message> {
+        column![
+            text(label.to_string()).size(13),
+            text_input(placeholder, value).on_input(msg).on_submit(Message::AddServer).padding([5, 8]).size(14)
+        ]
+        .spacing(4)
+        .into()
+    };
+    let mut form = column![
+        row![
+            container(field("Address", "user@203.0.113.10 or an ~/.ssh/config name", &f.target, Message::FormTarget))
+                .width(Length::FillPortion(3)),
+            container(field("Name (optional)", "web server", &f.name, Message::FormName)).width(Length::FillPortion(2)),
+        ]
+        .spacing(10),
+        row![
+            container(field("Key file (optional)", "~/.ssh/my-aws-key.pem", &f.key, Message::FormKey))
+                .width(Length::FillPortion(3)),
+            container(field("Port (optional)", "22", &f.port, Message::FormPort)).width(Length::FillPortion(2)),
+        ]
+        .spacing(10),
+    ]
+    .spacing(10);
+    if let Some(e) = &f.error {
+        form = form.push(text(e).size(13).style(style::HOT));
+    }
+    form = form.push(row![button(text("Add and connect").size(13))
+        .padding([5, 12])
+        .style(iced::theme::Button::Primary)
+        .on_press(Message::AddServer)]);
+    card(
+        "Servers",
+        theme,
+        column![
+            muted(
+                "Watch a cloud or home server (AWS, Azure, DigitalOcean, a Raspberry Pi…) over SSH. sysmon uses this computer's ssh with your keys and ~/.ssh/config, so the server needs no open ports. Password logins are not supported. If sysmon is missing on the server, it can install itself there in your home folder.",
+                theme
+            ),
+            list,
+            form,
+        ]
+        .spacing(14),
+    )
+}
+
+fn waiting_panel<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
+    let name = app.server().map(|s| s.name.as_str()).unwrap_or("the server");
+    let (title, detail) = match &app.link {
+        Link::Connecting | Link::Live => (
+            format!("Waiting for the first reading from {name}…"),
+            "Connecting over SSH and starting sysmon there. This usually takes a few seconds.".to_string(),
+        ),
+        Link::Installing => (
+            format!("Installing sysmon on {name}…"),
+            "It goes into ~/.local/bin on the server; no root access is used.".into(),
+        ),
+        Link::Failed(Failure::NotInstalled) => (
+            format!("sysmon is not installed on {name}"),
+            "Use \u{201c}Install on server\u{201d} above, or install it there yourself from the releases page.".into(),
+        ),
+        Link::Failed(Failure::Outdated(_)) => {
+            (format!("sysmon on {name} needs updating"), "Use \u{201c}Update sysmon on server\u{201d} above.".into())
+        }
+        Link::Failed(Failure::Other(_)) => (
+            format!("No readings from {name}"),
+            "The message above says what went wrong. You can check the address and key in Settings, then try again."
+                .into(),
+        ),
+    };
+    container(column![text(title).size(18).font(BOLD), muted(detail, theme)].spacing(8).align_items(Alignment::Center))
+        .width(Length::Fill)
+        .padding(60)
+        .center_x()
+        .style(style::card())
+        .into()
 }
