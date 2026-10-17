@@ -172,6 +172,13 @@ pub struct Battery {
     pub now: f64,
     pub full: f64,
     pub rate: Option<f64>,
+    /// True when `now`/`full`/`rate` are energy (µWh, µW) rather than charge.
+    #[serde(default)]
+    pub energy: bool,
+    /// True when the rate was worked out from the falling charge level
+    /// because the firmware does not report it.
+    #[serde(default)]
+    pub estimated: bool,
 }
 
 /// A battery in a wireless mouse, keyboard, headset or similar.
@@ -369,6 +376,7 @@ pub struct Collector {
     nets: HashMap<String, (u64, u64)>,
     procs: HashMap<u32, u64>,
     users: HashMap<u32, String>,
+    batteries: BatteryAnchors,
     gpus: gpu::Probe,
     clk_tck: f64,
     page_size: u64,
@@ -386,6 +394,7 @@ impl Collector {
             nets: HashMap::new(),
             procs: HashMap::new(),
             users: HashMap::new(),
+            batteries: HashMap::new(),
             gpus: gpu::Probe::new(),
             clk_tck: if clk > 0 { clk as f64 } else { 100.0 },
             page_size: if page > 0 { page as u64 } else { 4096 },
@@ -421,7 +430,8 @@ impl Collector {
         let (temps, fans) = read_hwmon(Path::new("/sys/class/hwmon"));
         s.temps = if temps.is_empty() { read_thermal_zones(Path::new("/sys/class/thermal")) } else { temps };
         s.fans = fans;
-        let (bats, devices, ac) = read_power(Path::new("/sys/class/power_supply"));
+        let (mut bats, devices, ac) = read_power(Path::new("/sys/class/power_supply"));
+        estimate_rates(&mut self.batteries, &mut bats, now);
         s.batteries = bats;
         s.device_batteries = devices;
         s.ac_online = ac;
@@ -806,24 +816,17 @@ fn read_power(root: &Path) -> (Vec<Battery>, Vec<DeviceBattery>, Option<bool>) {
         let power = n("power_now").map(|v| v.abs() / 1e6).filter(|v| *v > 0.0);
         // Batteries report either charge (µAh, with current) or energy
         // (µWh, with power). Use whichever pair exists.
-        let (now, full, design, rate) = match (n("energy_now"), n("energy_full")) {
-            (Some(now), Some(full)) => (now, full, n("energy_full_design"), power.map(|w| w * 1e6)),
+        let (now, full, design, rate, energy) = match (n("energy_now"), n("energy_full")) {
+            (Some(now), Some(full)) => (now, full, n("energy_full_design"), power.map(|w| w * 1e6), true),
             _ => (
                 n("charge_now").unwrap_or(0.0),
                 n("charge_full").unwrap_or(0.0),
                 n("charge_full_design"),
                 current.map(|a| a * 1e6),
+                false,
             ),
         };
-        let time_left = rate.filter(|r| *r > 0.0).and_then(|r| {
-            let hours = match status.as_str() {
-                "Discharging" => now / r,
-                "Charging" => (full - now).max(0.0) / r,
-                _ => return None,
-            };
-            // Some firmware reports nonsense rates; ignore days-long estimates.
-            (hours < 48.0).then_some((hours * 3600.0) as u64)
-        });
+        let time_left = time_left(&status, now, full, rate);
         let percent = n("capacity").map(|c| c as f32).unwrap_or_else(|| pct(now as u64, full as u64));
         batteries.push(Battery {
             name,
@@ -839,9 +842,57 @@ fn read_power(root: &Path) -> (Vec<Battery>, Vec<DeviceBattery>, Option<bool>) {
             now,
             full,
             rate,
+            energy,
+            estimated: false,
         });
     }
     (batteries, devices, ac)
+}
+
+/// Seconds until empty or full at `rate` (units per hour).
+fn time_left(status: &str, now: f64, full: f64, rate: Option<f64>) -> Option<u64> {
+    let r = rate.filter(|r| *r > 0.0)?;
+    let hours = match status {
+        "Discharging" => now / r,
+        "Charging" => (full - now).max(0.0) / r,
+        _ => return None,
+    };
+    // Some firmware reports nonsense rates; ignore days-long estimates.
+    (hours < 48.0).then_some((hours * 3600.0).round() as u64)
+}
+
+/// Where each battery's charge stood when it last changed between
+/// charging and discharging.
+pub type BatteryAnchors = HashMap<String, (String, f64, Instant)>;
+
+/// For batteries whose firmware gives no current or power reading, works out
+/// the rate from how far the charge has moved since `anchors` were set
+/// (after at least a minute, so the level has had time to change).
+pub fn estimate_rates(anchors: &mut BatteryAnchors, batteries: &mut [Battery], now: Instant) {
+    for b in batteries {
+        let entry = anchors.entry(b.name.clone()).or_insert_with(|| (b.status.clone(), b.now, now));
+        let moving = b.status == "Discharging" || b.status == "Charging";
+        if entry.0 != b.status || !moving {
+            *entry = (b.status.clone(), b.now, now);
+            continue;
+        }
+        if b.rate.is_some() {
+            continue;
+        }
+        let secs = now.duration_since(entry.2).as_secs_f64();
+        let moved = (b.now - entry.1).abs();
+        if secs < 60.0 || moved <= 0.0 {
+            continue;
+        }
+        let rate = moved / (secs / 3600.0);
+        b.rate = Some(rate);
+        b.estimated = true;
+        b.time_left = time_left(&b.status, b.now, b.full, b.rate);
+        if b.power_w.is_none() {
+            // Energy rates are already in µW; charge rates are µA, times volts.
+            b.power_w = if b.energy { Some((rate / 1e6) as f32) } else { b.voltage.map(|v| (rate / 1e6) as f32 * v) };
+        }
+    }
 }
 
 /// File systems on block devices that are worth showing, plus pool-based
@@ -1183,6 +1234,34 @@ pub(crate) mod tests {
         let (bats, devices, ac) = read_power(&sys.0);
         assert!(bats.is_empty() && devices.is_empty());
         assert_eq!(ac, Some(true));
+    }
+
+    #[test]
+    fn battery_rate_estimated_when_firmware_is_silent() {
+        let bat = |now: f64| Battery {
+            name: "BAT0".into(),
+            status: "Discharging".into(),
+            now,
+            full: 3_700_000.0,
+            voltage: Some(11.0),
+            ..Default::default()
+        };
+        let mut anchors = BatteryAnchors::new();
+        let t0 = Instant::now();
+        let mut b = vec![bat(1_400_000.0)];
+        estimate_rates(&mut anchors, &mut b, t0);
+        assert_eq!(b[0].rate, None);
+        // 100 mAh used in 10 minutes = 600 mA; 1.3 Ah left = 2 h 10 m.
+        let mut b = vec![bat(1_300_000.0)];
+        estimate_rates(&mut anchors, &mut b, t0 + std::time::Duration::from_secs(600));
+        assert!(b[0].estimated);
+        assert_eq!(b[0].rate.map(|r| r.round()), Some(600_000.0));
+        assert_eq!(b[0].time_left, Some(13 * 600));
+        assert!((b[0].power_w.unwrap() - 6.6).abs() < 0.01, "600 mA at 11 V");
+        // Plugging in restarts the measurement.
+        let mut b = vec![Battery { status: "Charging".into(), ..bat(1_300_000.0) }];
+        estimate_rates(&mut anchors, &mut b, t0 + std::time::Duration::from_secs(660));
+        assert_eq!(b[0].rate, None);
     }
 
     #[test]

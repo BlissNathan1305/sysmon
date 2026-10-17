@@ -120,7 +120,7 @@ fn link(e: Element<'_, Message>, t: Tab) -> Element<'_, Message> {
     mouse_area(e).on_press(Message::Tab(t)).into()
 }
 
-fn pct_label(v: f32) -> String {
+pub(crate) fn pct_label(v: f32) -> String {
     format!("{v:.0}%")
 }
 
@@ -144,7 +144,7 @@ fn or_dash(v: Option<String>) -> String {
     v.unwrap_or_else(|| "—".into())
 }
 
-fn group(n: usize) -> String {
+pub(crate) fn group(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
@@ -156,7 +156,7 @@ fn group(n: usize) -> String {
     out
 }
 
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
@@ -166,7 +166,7 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn state_name(c: char) -> &'static str {
+pub(crate) fn state_name(c: char) -> &'static str {
     match c {
         'R' => "Running",
         'S' => "Sleeping",
@@ -178,12 +178,12 @@ fn state_name(c: char) -> &'static str {
     }
 }
 
-fn avg_freq(s: &Snapshot) -> Option<f32> {
+pub(crate) fn avg_freq(s: &Snapshot) -> Option<f32> {
     let f: Vec<f32> = s.freqs_mhz.iter().copied().filter(|f| *f > 0.0).collect();
     (!f.is_empty()).then(|| f.iter().sum::<f32>() / f.len() as f32)
 }
 
-fn ghz(mhz: f32) -> String {
+pub(crate) fn ghz(mhz: f32) -> String {
     if mhz >= 1000.0 {
         format!("{:.2} GHz", mhz / 1000.0)
     } else {
@@ -192,7 +192,7 @@ fn ghz(mhz: f32) -> String {
 }
 
 /// Groups hwmon chips for display, folding the many ACPI zones together.
-fn sensor_group(chip: &str) -> String {
+pub(crate) fn sensor_group(chip: &str) -> String {
     if chip.starts_with("acpitz") {
         "ACPI thermal zones".into()
     } else {
@@ -201,7 +201,7 @@ fn sensor_group(chip: &str) -> String {
 }
 
 /// What kind of connection an interface is, from its name.
-fn net_kind(n: &stats::Net) -> &'static str {
+pub(crate) fn net_kind(n: &stats::Net) -> &'static str {
     let name = n.name.as_str();
     if n.wireless {
         "Wi-Fi"
@@ -837,6 +837,8 @@ fn sensors_tab<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
                 ("Charging", Some(t)) => ("Time until full", fmt_duration(t)),
                 _ => ("Time remaining", "—".into()),
             };
+            // The firmware gave no rate, so it was worked out from the charge level.
+            let est = if b.estimated { " (estimated)" } else { "" };
             let title = if b.model.is_empty() {
                 format!("Battery ({})", b.name)
             } else {
@@ -860,10 +862,10 @@ fn sensors_tab<'a>(app: &'a App, theme: &Theme) -> Element<'a, Message> {
                     ),
                     kv(
                         if b.status == "Charging" { "Charging rate" } else { "Power draw" },
-                        or_dash(b.power_w.map(|w| format!("{w:.1} W"))),
+                        or_dash(b.power_w.map(|w| format!("{w:.1} W{est}"))),
                         theme
                     ),
-                    kv(time.0, time.1, theme),
+                    kv(time.0, if time.1 == "—" { time.1 } else { format!("{}{est}", time.1) }, theme),
                     kv("Health (capacity left vs. new)", or_dash(b.health.map(|h| format!("{h:.0}%"))), theme),
                     kv("Charge cycles", or_dash(b.cycles.map(|c| c.to_string())), theme),
                     kv("Voltage", or_dash(b.voltage.map(|v| format!("{v:.2} V"))), theme),

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-10-17
+
+- **Remote mode**: watch a cloud or home server over SSH in the same window. Pick it from the new machine menu; servers (address, optional key file and port) are saved in Settings. sysmon runs `ssh <server> sysmon --agent`, so no ports or services are needed on the server.
+- **Install on server**: puts sysmon in `~/.local/bin` on the server, downloading the release there or copying this computer's copy when the processors match.
+- Clear messages for common SSH problems (refused key, unknown host, firewall or security group, changed host key, key file permissions) and for a missing or outdated sysmon on the server.
+- **Terminal mode** (`sysmon --tui`): the same readings in the terminal, with process search, sort and details.
+- `sysmon --agent [--interval MS]` prints readings as JSON lines.
+- Batteries whose firmware reports no current or power (some HP laptops while unplugged) now get an estimated power draw and time left, worked out from the falling charge level and marked "(estimated)".
+- CSV exports include the machine's name in the file name.
+- The .rpm also recommends openSUSE's `dejavu-fonts`, and the no-font message names it.
+
 ## 0.3.1 — 2026-10-17
 
 - On a system with no fonts at all, sysmon now says which font package to install instead of crashing twice.

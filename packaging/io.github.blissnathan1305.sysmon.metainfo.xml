@@ -22,6 +22,7 @@
       <li>A hardware report you can copy into a help forum</li>
       <li>Optional desktop alerts for a hot CPU, low battery, or full memory or disk</li>
       <li>Export recent readings to a CSV file</li>
+      <li>Watch cloud and home servers over SSH, or use the terminal mode on a server</li>
     </ul>
     <p>
       It reads everything locally from the kernel, needs no root access and
@@ -73,6 +74,11 @@
   </requires>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-10-17">
+      <description>
+        <p>Watch cloud and home servers over SSH in the same window, install sysmon on a server with one button, and a new terminal mode (sysmon --tui).</p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-10-17">
       <description>
         <p>Clear advice instead of a crash on systems without fonts, and a font dependency in the packages.</p>

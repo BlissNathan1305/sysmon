@@ -16,6 +16,7 @@ iced = { version = "0.12", features = ["tokio", "canvas"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ratatui = "0.29"
 
 [profile.release]
 opt-level = 3

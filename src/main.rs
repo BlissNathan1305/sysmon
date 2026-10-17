@@ -10,6 +10,7 @@ mod remote;
 mod report;
 mod stats;
 mod style;
+mod tui;
 mod view;
 
 use std::fmt;
@@ -36,6 +37,9 @@ Usage: sysmon [OPTIONS]
 Options:
   -h, --help       Show this help and exit
   -V, --version    Show the version and exit
+  --tui [--interval MS]
+                   Show everything in the terminal instead of a window, for
+                   SSH sessions and machines without a desktop.
   --agent [--interval MS]
                    Run headless and print readings as JSON lines. This is what
                    the window starts over SSH to watch a server; you do not
@@ -54,18 +58,18 @@ Settings are kept in $XDG_CONFIG_HOME/sysmon/settings.conf
 
 pub fn main() -> iced::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let interval = args
+        .iter()
+        .position(|a| a == "--interval")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|ms| ms.clamp(250, 60_000));
     if let Some(arg) = args.first() {
         match arg.as_str() {
             "--agent" => {
-                let ms = args
-                    .iter()
-                    .position(|a| a == "--interval")
-                    .and_then(|i| args.get(i + 1))
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(1000)
-                    .clamp(250, 60_000);
-                std::process::exit(remote::run_agent(Duration::from_millis(ms)));
+                std::process::exit(remote::run_agent(Duration::from_millis(interval.unwrap_or(1000))));
             }
+            "--tui" => std::process::exit(tui::run(&Prefs::load(), interval)),
             "-h" | "--help" => {
                 println!("{HELP}");
                 return Ok(());

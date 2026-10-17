@@ -2,6 +2,8 @@
 
 A live system monitor for Linux. One window shows what your computer is doing right now: processor and per-core load, memory and swap, graphics card, temperatures and fans, battery health, disks, network connections and every running process. It also has a hardware report you can copy into a help forum, optional desktop alerts, and a CSV export of recent readings.
 
+It can also **watch a server**: a cloud machine on AWS, Azure, Google Cloud or DigitalOcean, a home server or a Raspberry Pi, over your normal SSH login, in the same window. On a machine you are logged into by SSH, `sysmon --tui` shows the same information in the terminal.
+
 It reads everything straight from the kernel (`/proc` and `/sys`). It needs no root access, no background service and no internet connection, and it sends nothing anywhere.
 
 ![Overview tab](docs/screenshots/overview.png)
@@ -90,6 +92,33 @@ sudo dnf remove sysmon             # if installed from the .rpm
 
 Your settings stay in `~/.config/sysmon/`; delete that folder to remove them too.
 
+## Watching a server (remote mode)
+
+Pick **Add a server…** in the machine menu at the top right (or open **Settings → Servers**) and enter:
+
+- **Address**: what you would type after `ssh`, such as `ubuntu@203.0.113.10`, `ec2-user@ec2-…amazonaws.com`, `root@my-droplet` or a `Host` name from `~/.ssh/config`.
+- **Key file** (optional): for example the `.pem` file AWS gave you. Leave it empty to use your usual SSH keys or agent.
+- **Port** (optional), if SSH is not on port 22.
+
+sysmon then runs `ssh <server> sysmon --agent` and shows the server in every tab. Nothing new is opened on the server: no port, no service, no root access. It stops when you switch back to **This computer** or close the window.
+
+If sysmon is not on the server yet, press **Install on server**. It downloads the matching release into `~/.local/bin` on the server (with `curl` or `wget`), or, if the server cannot download it, copies this computer's sysmon over SSH when both have the same kind of processor. You can also install it there yourself with any of the methods above; the window libraries are not needed for this.
+
+Things to know:
+
+- It uses key-based SSH logins only; there is no password prompt. Unknown servers are trusted on first connection (like answering "yes" to ssh's question); a server whose identity later changes is refused.
+- Readings are sent compressed, about 10–15 KB per update, mostly the process list.
+- On virtual machines there are no temperature, fan or battery sensors, so those panels are empty. GPU instances (for example AWS g4/g5 or Azure NC with NVIDIA cards) show their graphics card through `nvidia-smi`.
+- Alerts work for the server you are watching, with its name in the notification.
+
+## Terminal mode
+
+```sh
+sysmon --tui              # or: sysmon --tui --interval 2000
+```
+
+The same readings in the terminal, for SSH sessions and machines without a desktop: Overview, Processes, Disks & Network, Sensors & Power and System tabs. Keys: `1`–`5` or Tab to switch tabs, `/` to search processes, `s` to change the sort, `Enter` for process details, `k` for kernel threads, `o` for only your processes, `p` to pause, `+`/`-` for the refresh rate, `?` for help and `q` to quit. It reads the machine it runs on, needs no display libraries, and is view-only like the window.
+
 ## Graphics support
 
 | GPU | What is shown |
@@ -134,10 +163,10 @@ sudo pacman -S libxkbcommon-x11 libxcursor libxrandr libxi wayland              
 | Ctrl+F | Search processes |
 | Ctrl+P | Pause or resume updates |
 | Ctrl+E | Export the recent history to CSV |
+
+Command line: `sysmon --tui` for terminal mode, `sysmon --agent` (used by remote mode), `sysmon --help` and `sysmon --version`.
 | Esc | Close the process details |
 | Ctrl+Q | Quit |
-
-`sysmon --help` and `sysmon --version` also work.
 
 ## Settings
 
@@ -162,9 +191,13 @@ The code is small and has two dependencies ([iced](https://iced.rs) for the wind
 | `src/pci.rs` | PCI device names from `pci.ids` |
 | `src/alerts.rs` | Alert rules and desktop notifications |
 | `src/history.rs` | Recent readings for the graphs and the CSV export |
+| `src/remote.rs` | Remote mode: the agent, the SSH connection and installing on a server |
+| `src/tui.rs` | Terminal mode |
 | `src/main.rs` | Window, settings and update loop |
 | `src/view.rs` | Everything drawn on screen |
 | `src/graph.rs`, `src/style.rs` | Line graphs and colours |
+
+`cargo test -- --ignored live` runs an end-to-end remote-mode test against a real SSH server (set `SYSMON_TEST_SSH`, and optionally `SYSMON_TEST_PORT` and `SYSMON_TEST_KEY`); it was developed against an Ubuntu container running sshd.
 
 The tests include fake `/sys` trees for hardware that is hard to have on one desk: AMD and Intel graphics, AMD processors with motherboard fans, ARM boards, laptops with two batteries and wireless mice, and desktops without a battery.
 
